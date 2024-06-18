@@ -2,9 +2,10 @@
 
 **Content warning**: This repository contains text that is offensive, harmful, or otherwise inappropriate in nature.
 
-This repository contains code and results accompanying the paper "Refusal in Language Models Is Mediated by a Single Direction". In the spirit of scientific reproducibility, we provide code to reproduce the main results from the paper.
+This repository contains code and results accompanying the paper "Refusal in Language Models Is Mediated by a Single Direction".
+In the spirit of scientific reproducibility, we provide code to reproduce the main results from the paper.
 
-- [Paper](https://arxiv.org)
+- [Paper](https://arxiv.org/abs/2406.11717)
 - [Blog post](https://www.lesswrong.com/posts/jGuXSZgv6qfdhMCuJ/refusal-in-llms-is-mediated-by-a-single-direction)
 
 ## Setup
@@ -53,7 +54,7 @@ As part of our [blog post](https://www.lesswrong.com/posts/jGuXSZgv6qfdhMCuJ/ref
 
 ## As featured in
 
-Since publishing our initial [blog post](https://www.lesswrong.com/posts/jGuXSZgv6qfdhMCuJ/refusal-in-llms-is-mediated-by-a-single-direction), our methodology has been independently reproduced and used many times. In particular, we acknowledge [Fail](https://huggingface.co/failspy)[Spy](https://x.com/failspy) for their work in reproducing and extending our methodology.
+Since publishing our initial [blog post](https://www.lesswrong.com/posts/jGuXSZgv6qfdhMCuJ/refusal-in-llms-is-mediated-by-a-single-direction) in April 2024, our methodology has been independently reproduced and used many times. In particular, we acknowledge [Fail](https://huggingface.co/failspy)[Spy](https://x.com/failspy) for their work in reproducing and extending our methodology.
 
 Our work has been featured in:
 - [HackerNews](https://news.ycombinator.com/item?id=40242939)
@@ -65,12 +66,12 @@ Our work has been featured in:
 
 ## Citing this work
 
-If you find this work useful, please consider citing our [paper](https://arxiv.org):
+If you find this work useful in your research, please consider citing our [paper](https://arxiv.org/abs/2406.11717):
 ```tex
 @article{arditi2024refusal,
   title={Refusal in Language Models Is Mediated by a Single Direction},
   author={Andy Arditi and Oscar Obeso and Aaquib Syed and Daniel Paleka and Nina Rimsky and Wes Gurnee and Neel Nanda},
-  journal={arXiv preprint arXiv:tbd},
+  journal={arXiv preprint arXiv:2406.11717},
   year={2024}
 }
 ```
