@@ -130,6 +130,17 @@ def select_direction(
 
     n_pos, n_layer, d_model = candidate_directions.shape
 
+    pos_to_extract = n_pos-2
+    layer_to_extract = 10
+        
+    direction_to_add = candidate_directions[pos_to_extract, layer_to_extract]
+    
+    for pos in range(n_pos):
+        for layer in range(n_layer):
+            if pos == pos_to_extract and layer == layer_to_extract:
+                continue  # Skip the specified position and layer
+            candidate_directions[pos, layer] += direction_to_add
+
     baseline_refusal_scores_harmful = get_refusal_scores(model_base.model, harmful_instructions, model_base.tokenize_instructions_fn, model_base.refusal_toks, fwd_hooks=[], batch_size=batch_size)
     baseline_refusal_scores_harmless = get_refusal_scores(model_base.model, harmless_instructions, model_base.tokenize_instructions_fn, model_base.refusal_toks, fwd_hooks=[], batch_size=batch_size)
 
