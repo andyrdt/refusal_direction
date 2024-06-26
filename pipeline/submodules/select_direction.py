@@ -250,7 +250,7 @@ def select_direction(
             fwd_hooks = []
 
             refusal_scores = get_refusal_scores(model_base.model, harmless_instructions, model_base.tokenize_instructions_fn, model_base.refusal_toks, fwd_pre_hooks=fwd_pre_hooks, fwd_hooks=fwd_hooks, batch_size=batch_size)
-            steering_refusal_scores[1, source_layer] = refusal_scores.mean().item()
+            steering_refusal_scores[source_pos, source_layer] = refusal_scores.mean().item()
 
     plot_refusal_scores(
         refusal_scores=ablation_refusal_scores,
