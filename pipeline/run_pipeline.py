@@ -28,10 +28,8 @@ def parse_arguments():
     return parser.parse_args()
 
 def load_directions(file_path):
-    """Load direction from a JSON file."""
-    with open(file_path, 'r') as f:
-        directions = json.load(f)
-    return torch.tensor(directions)
+    """Load direction from a .pt file."""
+    return torch.load(file_path, map_location=torch.device('cpu'))
 
 def load_and_sample_datasets(cfg):
     """
