@@ -11,7 +11,7 @@ from pipeline.model_utils.model_factory import construct_model_base
 from pipeline.utils.hook_utils import get_activation_addition_input_pre_hook, get_all_direction_ablation_hooks
 
 from pipeline.submodules.generate_directions import generate_directions
-from pipeline.submodules.select_direction import select_direction, get_refusal_scores
+from pipeline.submodules.select_direction import select_direction, get_refusal_scores, select_direction_2
 from pipeline.submodules.evaluate_jailbreak import evaluate_jailbreak
 from pipeline.submodules.evaluate_loss import evaluate_loss
 
@@ -111,7 +111,7 @@ def select_and_save_direction_2(cfg, model_base, harmful_val, harmless_val, cand
     if not os.path.exists(os.path.join(cfg.artifact_path(), 'select_direction')):
         os.makedirs(os.path.join(cfg.artifact_path(), 'select_direction'))
 
-    pos, layer, direction = select_direction(
+    pos, layer, direction = select_direction_2(
         model_base,
         harmful_val,
         harmless_val,
