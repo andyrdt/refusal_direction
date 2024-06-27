@@ -15,11 +15,23 @@ from pipeline.submodules.select_direction import select_direction, get_refusal_s
 from pipeline.submodules.evaluate_jailbreak import evaluate_jailbreak
 from pipeline.submodules.evaluate_loss import evaluate_loss
 
+# def parse_arguments():
+#     """Parse model path argument from command line."""
+#     parser = argparse.ArgumentParser(description="Parse model path argument.")
+#     parser.add_argument('--model_path', type=str, required=True, help='Path to the model')
+#     return parser.parse_args()
 def parse_arguments():
-    """Parse model path argument from command line."""
-    parser = argparse.ArgumentParser(description="Parse model path argument.")
+    """Parse model path and optional direction file path from command line."""
+    parser = argparse.ArgumentParser(description="Parse model path and optional direction file path.")
     parser.add_argument('--model_path', type=str, required=True, help='Path to the model')
+    parser.add_argument('--direction_file', type=str, help='Path to the JSON file containing directions')
     return parser.parse_args()
+
+def load_directions(file_path):
+    """Load direction from a JSON file."""
+    with open(file_path, 'r') as f:
+        directions = json.load(f)
+    return torch.tensor(directions)
 
 def load_and_sample_datasets(cfg):
     """
@@ -94,6 +106,27 @@ def select_and_save_direction(cfg, model_base, harmful_val, harmless_val, candid
 
     return pos, layer, direction
 
+def select_and_save_direction_2(cfg, model_base, harmful_val, harmless_val, candidate_directions):
+    """Select and save the direction."""
+    if not os.path.exists(os.path.join(cfg.artifact_path(), 'select_direction')):
+        os.makedirs(os.path.join(cfg.artifact_path(), 'select_direction'))
+
+    pos, layer, direction = select_direction(
+        model_base,
+        harmful_val,
+        harmless_val,
+        candidate_directions,
+        artifact_dir=os.path.join(cfg.artifact_path(), "select_direction")
+    )
+
+    with open(f'{cfg.artifact_path()}/direction_metadata.json', "w") as f:
+        json.dump({"pos": pos, "layer": layer}, f, indent=4)
+
+    torch.save(direction, f'{cfg.artifact_path()}/direction.pt')
+
+    return pos, layer, direction
+
+
 def generate_and_save_completions_for_dataset(cfg, model_base, fwd_pre_hooks, fwd_hooks, intervention_label, dataset_name, dataset=None):
     """Generate and save completions for a dataset."""
     if not os.path.exists(os.path.join(cfg.artifact_path(), 'completions')):
@@ -133,7 +166,7 @@ def evaluate_loss_for_datasets(cfg, model_base, fwd_pre_hooks, fwd_hooks, interv
     with open(f'{cfg.artifact_path()}/loss_evals/{intervention_label}_loss_eval.json', "w") as f:
         json.dump(loss_evals, f, indent=4)
 
-def run_pipeline(model_path):
+def run_pipeline(model_path,directions=None):
     """Run the full pipeline."""
     model_alias = os.path.basename(model_path)
     cfg = Config(model_alias=model_alias, model_path=model_path)
@@ -150,7 +183,11 @@ def run_pipeline(model_path):
     candidate_directions = generate_and_save_candidate_directions(cfg, model_base, harmful_train, harmless_train)
     
     # 2. Select the most effective refusal direction
-    pos, layer, direction = select_and_save_direction(cfg, model_base, harmful_val, harmless_val, candidate_directions)
+    
+    if directions is not None:
+        pos, layer, direction = select_and_save_direction_2(cfg, model_base, harmful_val, harmless_val, directions)
+    else:
+        pos, layer, direction = select_and_save_direction(cfg, model_base, harmful_val, harmless_val,candidate_directions)
 
     baseline_fwd_pre_hooks, baseline_fwd_hooks = [], []
     ablation_fwd_pre_hooks, ablation_fwd_hooks = get_all_direction_ablation_hooks(model_base, direction)
@@ -185,6 +222,11 @@ def run_pipeline(model_path):
     evaluate_loss_for_datasets(cfg, model_base, ablation_fwd_pre_hooks, ablation_fwd_hooks, 'ablation')
     evaluate_loss_for_datasets(cfg, model_base, actadd_fwd_pre_hooks, actadd_fwd_hooks, 'actadd')
 
+# if __name__ == "__main__":
+#     args = parse_arguments()
+#     run_pipeline(model_path=args.model_path)
+
 if __name__ == "__main__":
     args = parse_arguments()
-    run_pipeline(model_path=args.model_path)
+    directions = load_directions(args.direction_file) if args.direction_file else None
+    run_pipeline(model_path=args.model_path, directions=directions)
