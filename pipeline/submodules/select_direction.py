@@ -130,7 +130,6 @@ def select_direction_2(
 
     d_model = candidate_directions.shape
     n_layer = 18
-    layer_to_extract = 10
         
     direction_to_add = candidate_directions
 
