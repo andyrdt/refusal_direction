@@ -24,9 +24,9 @@ It will then set up a virtual environment and install the required packages.
 To reproduce the main results from the paper, run the following command:
 
 ```bash
-python3 -m pipeline.run_pipeline --model_path {model_path}
+python3 -m pipeline.run_pipeline --model_path {model_path} --direction_file {refusal_direction_path}
 ```
-where `{model_path}` is the path to a HuggingFace model. For example, for Llama-3 8B Instruct, the model path would be `meta-llama/Meta-Llama-3-8B-Instruct`.
+where `{model_path}` is the path to a HuggingFace model, and direction_file is the path of the golden refusal direction(JSON file). For example, for Llama-3 8B Instruct, the model path would be `meta-llama/Meta-Llama-3-8B-Instruct`.
 
 The pipeline performs the following steps:
 1. Extract candiate refusal directions
