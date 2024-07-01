@@ -11,8 +11,8 @@ In the spirit of scientific reproducibility, we provide code to reproduce the ma
 ## Setup
 
 ```bash
-git clone https://github.com/andyrdt/refusal_direction.git
-cd refusal_direction
+git clone https://github.com/revmag/refusal_direction_for_cosine.git
+cd refusal_direction_for_cosine
 source setup.sh
 ```
 
