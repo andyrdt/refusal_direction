@@ -11,6 +11,9 @@ def construct_model_base(model_path: str) -> ModelBase:
     elif 'llama' in model_path.lower():
         from pipeline.model_utils.llama2_model import Llama2Model
         return Llama2Model(model_path)
+    elif 'gemma-2-' in model_path.lower():
+        from pipeline.model_utils.gemma2_model import Gemma2Model
+        return Gemma2Model(model_path)
     elif 'gemma' in model_path.lower():
         from pipeline.model_utils.gemma_model import GemmaModel
         return GemmaModel(model_path) 
