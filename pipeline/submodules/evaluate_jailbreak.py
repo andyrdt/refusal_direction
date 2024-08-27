@@ -9,6 +9,7 @@ from vllm import LLM, SamplingParams
 from vllm.distributed.parallel_state import destroy_model_parallel
 import torch
 import litellm
+import time
 
 # based on https://github.com/JailbreakBench/jailbreakbench/blob/4dbcc097739dd684fbf789cc3d4f97372bd72851/src/jailbreakbench/classifier.py
 # augmented with some additional prefixes
@@ -122,13 +123,23 @@ def substring_matching_judge_fn(completion: str, refusal_substrings: List[str]=_
     return any([refusal_substring.lower() in completion.lower() for refusal_substring in refusal_substrings])
 
 def llamaguard2_judge_fn(prompts: List[str], responses: List[str]) -> List[int]:
-
-    # make sure that an API key is available
     assert os.environ.get("TOGETHER_API_KEY", None) is not None, "TOGETHER_API_KEY environment variable must be set to run jailbreakbench evaluation."
 
     classifier = LlamaGuard2Classifier(os.environ["TOGETHER_API_KEY"])
 
-    classifications = classifier(prompts, responses)
+    batch_size = 20  # Adjust this value based on the API's rate limits
+    delay = 1  # Delay in seconds between batches
+
+    classifications = []
+    for i in range(0, len(prompts), batch_size):
+        batch_prompts = prompts[i:i+batch_size]
+        batch_responses = responses[i:i+batch_size]
+        
+        batch_classifications = classifier(batch_prompts, batch_responses)
+        classifications.extend(batch_classifications)
+        
+        if i + batch_size < len(prompts):
+            time.sleep(delay)
 
     classifications = [int(classification) for classification in classifications]
 
