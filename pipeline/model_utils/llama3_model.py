@@ -12,14 +12,15 @@ from pipeline.model_utils.model_base import ModelBase
 
 # Llama 3 chat templates are based on
 # - https://llama.meta.com/docs/model-cards-and-prompt-formats/meta-llama-3/
+# <|begin_of_text|> is automatically added by the tokenizer
 
-LLAMA3_CHAT_TEMPLATE = """"<|begin_of_text|><|start_header_id|>user<|end_header_id|>
+LLAMA3_CHAT_TEMPLATE = """<|start_header_id|>user<|end_header_id|>
 
 {instruction}<|eot_id|><|start_header_id|>assistant<|end_header_id|>
 
 """
 
-LLAMA3_CHAT_TEMPLATE_WITH_SYSTEM = """"<|begin_of_text|><|start_header_id|>system<|end_header_id|>
+LLAMA3_CHAT_TEMPLATE_WITH_SYSTEM = """<|start_header_id|>system<|end_header_id|>
 
 {system_prompt}<|eot_id|><|start_header_id|>user<|end_header_id|>
 
