@@ -253,6 +253,7 @@ def select_direction(
             )
 
             if discard_direction:
+                print(f"Discarding direction (KL check) ({source_pos},{source_layer}) {kl_div_score} {kl_threshold}")
                 continue
 
             filtered_scores.append((sorting_score, source_pos, source_layer))

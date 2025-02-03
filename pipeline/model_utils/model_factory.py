@@ -3,9 +3,11 @@ from pipeline.model_utils.model_base import ModelBase
 def construct_model_base(model_path: str) -> ModelBase:
 
     if 'qwen' in model_path.lower():
+        print(f"Loading {model_path} as qwen")
         from pipeline.model_utils.qwen_model import QwenModel
         return QwenModel(model_path)
-    if 'llama-3' in model_path.lower():
+    if 'llama-3' in model_path.lower() or 'distill-llama' in model_path.lower():
+        print(f"Loading {model_path} as llama-3")
         from pipeline.model_utils.llama3_model import Llama3Model
         return Llama3Model(model_path)
     elif 'llama' in model_path.lower():

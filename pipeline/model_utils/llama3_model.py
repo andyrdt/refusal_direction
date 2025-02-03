@@ -20,6 +20,15 @@ LLAMA3_CHAT_TEMPLATE = """<|start_header_id|>user<|end_header_id|>
 
 """
 
+LLAMA3_CHAT_TEMPLATE_FUTURE = """<|start_header_id|>user<|end_header_id|>
+
+{instruction}<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+<think>
+[THINKING_SKIPPED]
+</think>
+"""
+
 LLAMA3_CHAT_TEMPLATE_WITH_SYSTEM = """<|start_header_id|>system<|end_header_id|>
 
 {system_prompt}<|eot_id|><|start_header_id|>user<|end_header_id|>
@@ -46,6 +55,10 @@ def format_instruction_llama3_chat(
 
     if output is not None:
         formatted_instruction += output
+
+    abort_thinking = '<think>\n[THINKING_SKIPPED]\n</think>\n'
+    formatted_instruction += abort_thinking
+    # print(formatted_instruction)
 
     return formatted_instruction
 
@@ -118,7 +131,7 @@ class Llama3Model(ModelBase):
         return functools.partial(tokenize_instructions_llama3_chat, tokenizer=self.tokenizer, system=None, include_trailing_whitespace=True)
 
     def _get_eoi_toks(self):
-        return self.tokenizer.encode(LLAMA3_CHAT_TEMPLATE.split("{instruction}")[-1], add_special_tokens=False)
+        return self.tokenizer.encode(LLAMA3_CHAT_TEMPLATE.split("{instruction}")[-1] + "</think>", add_special_tokens=False)
 
     def _get_refusal_toks(self):
         return LLAMA3_REFUSAL_TOKS
