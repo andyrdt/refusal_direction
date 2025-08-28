@@ -82,7 +82,7 @@ nvidia-nvjitlink-cu12==12.5.40
 nvidia-nvtx-cu12==12.1.105
 openai==1.33.0
 orjson==3.10.4
-outlines==0.0.43
+outlines
 packaging==24.1
 pandas==2.2.2
 parso==0.8.4
@@ -98,7 +98,6 @@ psutil==5.9.8
 ptyprocess==0.7.0
 pure-eval==0.2.2
 py-cpuinfo==9.0.0
-pyairports==2.1.1
 pyarrow==16.1.0
 pyarrow-hotfix==0.6
 pycountry==24.6.1

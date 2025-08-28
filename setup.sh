@@ -78,7 +78,7 @@ if [ $? -ne 0 ]; then
 fi
 
 setup_hf
-setup_together
+# setup_together
 setup_venv
 install_requirements
 
