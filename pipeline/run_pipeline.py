@@ -64,11 +64,17 @@ def generate_and_save_candidate_directions(cfg, model_base, harmful_train, harml
     if not os.path.exists(os.path.join(cfg.artifact_path(), 'generate_directions')):
         os.makedirs(os.path.join(cfg.artifact_path(), 'generate_directions'))
 
+    # For Qwen3, use thinking mode for direction generation
+    tokenize_fn = None
+    if hasattr(model_base, 'get_tokenize_instructions_for_generation_tasks'):
+        tokenize_fn = model_base.get_tokenize_instructions_for_generation_tasks()
+
     mean_diffs = generate_directions(
         model_base,
         harmful_train,
         harmless_train,
-        artifact_dir=os.path.join(cfg.artifact_path(), "generate_directions"))
+        artifact_dir=os.path.join(cfg.artifact_path(), "generate_directions"),
+        tokenize_instructions_fn=tokenize_fn)
 
     torch.save(mean_diffs, os.path.join(cfg.artifact_path(), 'generate_directions/mean_diffs.pt'))
 

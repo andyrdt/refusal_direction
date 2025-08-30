@@ -2,7 +2,10 @@ from pipeline.model_utils.model_base import ModelBase
 
 def construct_model_base(model_path: str) -> ModelBase:
 
-    if 'qwen' in model_path.lower():
+    if 'qwen3' in model_path.lower():
+        from pipeline.model_utils.qwen3_model import Qwen3Model
+        return Qwen3Model(model_path)
+    elif 'qwen' in model_path.lower():
         from pipeline.model_utils.qwen_model import QwenModel
         return QwenModel(model_path)
     if 'llama-3' in model_path.lower():
