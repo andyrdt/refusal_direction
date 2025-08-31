@@ -14,8 +14,8 @@ class Config:
     filter_train: bool = True
     filter_val: bool = True
     evaluation_datasets: Tuple[str] = ("jailbreakbench",)
-    max_new_tokens: int = 5512
-    jailbreak_eval_methodologies: Tuple[str] = ("substring_matching", "chatgpt4omini")
+    max_new_tokens: int = 1512
+    jailbreak_eval_methodologies: Tuple[str] = ("substring_matching", "deepseekv31")
     refusal_eval_methodologies: Tuple[str] = ("substring_matching",)
     ce_loss_batch_size: int = 2
     ce_loss_n_batches: int = 2048
