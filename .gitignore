@@ -4,3 +4,9 @@ __pycache__/
 venv
 pipeline/runs/
 results/
+template_generation_results/
+visualization_results/
+stealth_results/
+stealth_generation_results/
+jailbreak_visualization_results/
+jailbreak_results/
