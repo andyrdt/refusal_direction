@@ -134,16 +134,16 @@ def format_instructions_with_template(instructions: List[str], format_thinking_t
     return formatted_instructions
 
 
-def get_parallel_component_hook(direction: torch.Tensor, results_cache: Dict, sample_idx: int, layer_idx: int):
+def get_parallel_component_hook(direction: torch.Tensor, results_cache: Dict, batch_start_idx: int, layer_idx: int):
     """
-    Create a hook to collect parallel components.
-    
+    Create a hook to collect parallel components for a batch.
+
     Args:
         direction: Refusal direction tensor
         results_cache: Dictionary to store results
-        sample_idx: Index of current sample
+        batch_start_idx: Starting index of current batch
         layer_idx: Index of current layer
-        
+
     Returns:
         Hook function
     """
@@ -152,23 +152,26 @@ def get_parallel_component_hook(direction: torch.Tensor, results_cache: Dict, sa
             activation = input_data[0]
         else:
             activation = input_data
-            
+
         # activation shape: [batch, seq, d_model]
         # Take the last token position
         last_token_activation = activation[:, -1, :]  # [batch, d_model]
-        
+
         # Normalize direction and convert to activation dtype and device
         direction_norm = direction / (direction.norm() + 1e-8)
         direction_norm = direction_norm.to(device=activation.device, dtype=activation.dtype)
-        
+
         # Calculate parallel component (keep sign for positive/negative analysis)
         parallel_component = last_token_activation @ direction_norm  # [batch]
-        
-        # Store results (move to CPU to save GPU memory)
-        if sample_idx not in results_cache:
-            results_cache[sample_idx] = {}
-        results_cache[sample_idx][layer_idx] = parallel_component.cpu().numpy()
-        
+
+        # Store results for each sample in the batch (move to CPU to save GPU memory)
+        batch_results = parallel_component.cpu().numpy()
+        for batch_idx, component_value in enumerate(batch_results):
+            global_sample_idx = batch_start_idx + batch_idx
+            if global_sample_idx not in results_cache:
+                results_cache[global_sample_idx] = {}
+            results_cache[global_sample_idx][layer_idx] = component_value
+
     return hook_fn
 
 
@@ -205,13 +208,11 @@ def collect_activations_with_hooks(model_base, formatted_instructions: List[str]
         input_ids = tokenized.input_ids.to(model_base.model.device)
         attention_mask = tokenized.attention_mask.to(model_base.model.device)
         
-        # Create hooks for all layers
+        # Create hooks for all layers (one per layer for the batch)
         fwd_pre_hooks = []
         for layer_idx in range(n_layers):
-            for batch_idx in range(len(batch_instructions)):
-                global_sample_idx = i + batch_idx
-                hook = get_parallel_component_hook(direction, results_cache, global_sample_idx, layer_idx)
-                fwd_pre_hooks.append((model_base.model_block_modules[layer_idx], hook))
+            hook = get_parallel_component_hook(direction, results_cache, i, layer_idx)
+            fwd_pre_hooks.append((model_base.model_block_modules[layer_idx], hook))
         
         # Forward pass with hooks
         with add_hooks(module_forward_pre_hooks=fwd_pre_hooks, module_forward_hooks=[]):
