@@ -24,10 +24,13 @@ from pipeline.utils.hook_utils import add_hooks
 import importlib
 import re
 
-# Attention Head Ablation Configuration for Qwen3-14B
-# Format: {layer_idx: [head_indices_to_ablate]}
+# Attention Head Patching Configuration for Qwen3-14B
+# Format: {layer_idx: [head_indices_to_patch]}
 # Layers: 0-39, Heads per layer: 0-39
-# HEAD_ABLATION_CONFIG = {
+
+
+# 60 heads
+# HEAD_PATCHING_CONFIG = {
 #     15: [23],
 #     18: [1, 4, 19],
 #     19: [12, 14],
@@ -50,7 +53,8 @@ import re
 # }
 
 
-HEAD_ABLATION_CONFIG = {
+# 100 heads
+HEAD_PATCHING_CONFIG = {
     15: [6, 15, 23],
     16: [27, 37, 39],
     17: [30],
@@ -73,6 +77,7 @@ HEAD_ABLATION_CONFIG = {
     34: [8, 10, 16, 36],
     35: [2, 6, 9, 12, 19, 31, 34]
 }
+
 
 def extract_length_from_filename(template_name: str) -> str:
     """
@@ -131,23 +136,23 @@ def load_refusal_direction(direction_path: str, metadata_path: str) -> Tuple[tor
     return direction, metadata
 
 
-def setup_model_and_harmful_data(model_path: str, cfg: Config) -> Tuple[object, List[str]]:
+def setup_model_and_data(model_path: str, cfg: Config) -> Tuple[object, List[str], List[str]]:
     """
-    Setup model and load only harmful datasets.
-    
+    Setup model and load both harmful and harmless datasets.
+
     Args:
         model_path: Path to the model
         cfg: Configuration object
-        
+
     Returns:
-        Tuple of (model_base, harmful_instructions)
+        Tuple of (model_base, harmful_instructions, harmless_instructions)
     """
     print(f"Loading model from {model_path}")
     model_base = construct_model_base(model_path)
-    
+
     # Use same sampling logic as run_pipeline.py
     random.seed(42)
-    
+
     # Load harmful instructions from evaluation datasets
     print(f"Loading harmful instructions from evaluation datasets: {cfg.evaluation_datasets}")
     harmful_instructions = []
@@ -156,9 +161,46 @@ def setup_model_and_harmful_data(model_path: str, cfg: Config) -> Tuple[object, 
         instructions = [d['instruction'] for d in dataset]
         harmful_instructions.extend(instructions)
         print(f"  - {dataset_name}: {len(instructions)} instructions")
-    
+
     print(f"Total loaded: {len(harmful_instructions)} harmful instructions")
-    
+
+    # Load harmless instructions from test split (same as harmless components script)
+    print("Loading harmless test dataset...")
+    harmless_test = load_dataset_split(harmtype='harmless', split='test', instructions_only=True)
+    harmless_instructions = random.sample(harmless_test, min(cfg.n_test, len(harmless_test)))
+    print(f"Total loaded: {len(harmless_instructions)} harmless instructions")
+
+    return model_base, harmful_instructions, harmless_instructions
+
+
+def setup_model_and_harmful_data(model_path: str, cfg: Config) -> Tuple[object, List[str]]:
+    """
+    Setup model and load only harmful datasets.
+
+    Args:
+        model_path: Path to the model
+        cfg: Configuration object
+
+    Returns:
+        Tuple of (model_base, harmful_instructions)
+    """
+    print(f"Loading model from {model_path}")
+    model_base = construct_model_base(model_path)
+
+    # Use same sampling logic as run_pipeline.py
+    random.seed(42)
+
+    # Load harmful instructions from evaluation datasets
+    print(f"Loading harmful instructions from evaluation datasets: {cfg.evaluation_datasets}")
+    harmful_instructions = []
+    for dataset_name in cfg.evaluation_datasets:
+        dataset = load_dataset(dataset_name)
+        instructions = [d['instruction'] for d in dataset]
+        harmful_instructions.extend(instructions)
+        print(f"  - {dataset_name}: {len(instructions)} instructions")
+
+    print(f"Total loaded: {len(harmful_instructions)} harmful instructions")
+
     return model_base, harmful_instructions
 
 
@@ -224,26 +266,68 @@ def get_parallel_component_hook(direction: torch.Tensor, results_cache: Dict, ba
     return hook_fn
 
 
-def get_qwen3_attention_head_ablation_hook(layer_idx: int, head_indices_to_ablate: List[int]):
+def get_qwen3_harmless_attention_collection_hook(layer_idx: int, head_indices: List[int], harmless_attention_cache: Dict, sample_indices: List[int]):
     """
-    Create attention head ablation hook for Qwen3-14B model.
-
-    Qwen3-14B specifications:
-    - 40 layers (0-39)
-    - 40 attention heads per layer (0-39)
-    - hidden_size = 5120
-    - head_dim = 128
+    Create hook to collect attention head outputs from harmless instructions.
 
     Args:
         layer_idx: Layer index (0-39)
-        head_indices_to_ablate: List of head indices to ablate (0-39)
+        head_indices: List of head indices to collect (0-39)
+        harmless_attention_cache: Cache to store harmless attention outputs
+        sample_indices: List of sample indices for current batch
 
     Returns:
-        Hook function for attention head ablation
+        Hook function for collecting harmless attention head outputs
     """
     def hook_fn(module, input, output):
         # Qwen3 self_attn output: (attention_output, attention_weights, past_key_value)
-        # We only need to modify attention_output
+        if isinstance(output, tuple):
+            attn_output = output[0]  # [batch, seq, hidden_size=5120]
+        else:
+            attn_output = output
+
+        batch_size, seq_len, hidden_size = attn_output.shape
+        num_heads = 40
+        head_dim = hidden_size // num_heads  # 128
+
+        # Reshape to multi-head format: [batch, seq, num_heads, head_dim]
+        reshaped_output = attn_output.view(batch_size, seq_len, num_heads, head_dim)
+
+        # Initialize cache structure if needed
+        if layer_idx not in harmless_attention_cache:
+            harmless_attention_cache[layer_idx] = {}
+
+        # Collect specified attention heads for each sample in batch
+        for batch_idx in range(batch_size):
+            if batch_idx < len(sample_indices):
+                sample_idx = sample_indices[batch_idx]
+                if sample_idx not in harmless_attention_cache[layer_idx]:
+                    harmless_attention_cache[layer_idx][sample_idx] = {}
+
+                for head_idx in head_indices:
+                    if 0 <= head_idx < num_heads:
+                        # Store head output: [seq, head_dim] -> move to CPU to save GPU memory
+                        head_output = reshaped_output[batch_idx, :, head_idx, :].detach().cpu()
+                        harmless_attention_cache[layer_idx][sample_idx][head_idx] = head_output
+
+    return hook_fn
+
+
+def get_qwen3_attention_patching_hook(layer_idx: int, head_indices: List[int], harmless_attention_cache: Dict, sample_indices: List[int]):
+    """
+    Create attention head patching hook that replaces harmful attention heads with harmless ones.
+
+    Args:
+        layer_idx: Layer index (0-39)
+        head_indices: List of head indices to patch (0-39)
+        harmless_attention_cache: Cache containing harmless attention outputs
+        sample_indices: List of sample indices for current batch
+
+    Returns:
+        Hook function for attention head patching
+    """
+    def hook_fn(module, input, output):
+        # Qwen3 self_attn output: (attention_output, attention_weights, past_key_value)
         if isinstance(output, tuple):
             attn_output = output[0]  # [batch, seq, hidden_size=5120]
             other_outputs = output[1:]
@@ -252,91 +336,188 @@ def get_qwen3_attention_head_ablation_hook(layer_idx: int, head_indices_to_ablat
             other_outputs = ()
 
         batch_size, seq_len, hidden_size = attn_output.shape
-
-        # Qwen3-14B: 40 heads × 128 head_dim = 5120 hidden_size
         num_heads = 40
         head_dim = hidden_size // num_heads  # 128
 
         # Reshape to multi-head format: [batch, seq, num_heads, head_dim]
         reshaped_output = attn_output.view(batch_size, seq_len, num_heads, head_dim)
 
-        # Ablate specified heads (set to zero)
-        for head_idx in head_indices_to_ablate:
-            if 0 <= head_idx < num_heads:
-                reshaped_output[:, :, head_idx, :] = 0.0
+        # Replace specified heads with harmless attention outputs
+        if layer_idx in harmless_attention_cache:
+            for batch_idx in range(batch_size):
+                if batch_idx < len(sample_indices):
+                    sample_idx = sample_indices[batch_idx]
+                    if sample_idx in harmless_attention_cache[layer_idx]:
+                        for head_idx in head_indices:
+                            if (0 <= head_idx < num_heads and
+                                head_idx in harmless_attention_cache[layer_idx][sample_idx]):
+                                # Get harmless attention output and move to current device
+                                harmless_head_output = harmless_attention_cache[layer_idx][sample_idx][head_idx]
+                                harmless_head_output = harmless_head_output.to(device=attn_output.device, dtype=attn_output.dtype)
+
+                                # Ensure sequence length matches (truncate or pad as needed)
+                                if harmless_head_output.shape[0] != seq_len:
+                                    if harmless_head_output.shape[0] > seq_len:
+                                        harmless_head_output = harmless_head_output[:seq_len, :]
+                                    else:
+                                        # Pad with zeros if harmless sequence is shorter
+                                        pad_length = seq_len - harmless_head_output.shape[0]
+                                        padding = torch.zeros(pad_length, head_dim, device=attn_output.device, dtype=attn_output.dtype)
+                                        harmless_head_output = torch.cat([harmless_head_output, padding], dim=0)
+
+                                # Replace the head output
+                                reshaped_output[batch_idx, :, head_idx, :] = harmless_head_output
 
         # Reshape back to original format: [batch, seq, hidden_size]
-        ablated_output = reshaped_output.view(batch_size, seq_len, hidden_size)
+        patched_output = reshaped_output.view(batch_size, seq_len, hidden_size)
 
         # Return modified output
         if other_outputs:
-            return (ablated_output, *other_outputs)
+            return (patched_output, *other_outputs)
         else:
-            return ablated_output
+            return patched_output
 
     return hook_fn
 
 
-def create_head_ablation_hooks(model_base, head_ablation_config: Dict[int, List[int]]):
+
+
+def collect_harmless_attention_outputs(model_base, harmless_formatted_instructions: List[str],
+                                     head_config: Dict[int, List[int]], batch_size: int = 8) -> Dict:
     """
-    Create all attention head ablation hooks based on configuration.
+    Collect attention head outputs from harmless instructions.
+
+    Args:
+        model_base: Model instance
+        harmless_formatted_instructions: List of formatted harmless instructions
+        head_config: Dictionary of layer->heads to collect
+        batch_size: Batch size for processing
+
+    Returns:
+        Dictionary containing harmless attention outputs: {layer_idx: {sample_idx: {head_idx: tensor}}}
+    """
+    print("Collecting attention outputs from harmless instructions...")
+    harmless_attention_cache = {}
+
+    for i in tqdm(range(0, len(harmless_formatted_instructions), batch_size), desc="Collecting harmless attention"):
+        batch_instructions = harmless_formatted_instructions[i:i+batch_size]
+        batch_sample_indices = list(range(i, i + len(batch_instructions)))
+
+        # Tokenize
+        tokenized = model_base.tokenizer(
+            batch_instructions,
+            padding=True,
+            truncation=True,
+            return_tensors='pt',
+            add_special_tokens=False
+        )
+
+        input_ids = tokenized.input_ids.to(model_base.model.device)
+        attention_mask = tokenized.attention_mask.to(model_base.model.device)
+
+        # Create collection hooks for each layer
+        collection_hooks = []
+        for layer_idx, head_indices in head_config.items():
+            if 0 <= layer_idx < len(model_base.model_block_modules):
+                attn_module = model_base.model_block_modules[layer_idx].self_attn
+                collection_hook = get_qwen3_harmless_attention_collection_hook(
+                    layer_idx, head_indices, harmless_attention_cache, batch_sample_indices
+                )
+                collection_hooks.append((attn_module, collection_hook))
+
+        # Forward pass with collection hooks
+        with add_hooks(module_forward_pre_hooks=[], module_forward_hooks=collection_hooks):
+            with torch.no_grad():
+                _ = model_base.model(input_ids=input_ids, attention_mask=attention_mask)
+
+        # Clear GPU memory
+        torch.cuda.empty_cache()
+
+    print(f"Collected attention outputs for {len(harmless_formatted_instructions)} harmless samples")
+    return harmless_attention_cache
+
+
+def create_attention_patching_hooks(model_base, head_config: Dict[int, List[int]],
+                                  harmless_attention_cache: Dict, sample_indices: List[int]):
+    """
+    Create attention head patching hooks based on configuration.
 
     Args:
         model_base: Qwen3 model instance
-        head_ablation_config: {layer_idx: [head_indices_to_ablate]}
+        head_config: {layer_idx: [head_indices_to_patch]}
+        harmless_attention_cache: Cache of harmless attention outputs
+        sample_indices: List of sample indices for current batch
 
     Returns:
         List[Tuple[module, hook_fn]]: Hook list for add_hooks
     """
-    ablation_hooks = []
+    patching_hooks = []
 
-    print(f"Creating ablation hooks for {len(head_ablation_config)} layers...")
-
-    for layer_idx, head_indices in head_ablation_config.items():
+    for layer_idx, head_indices in head_config.items():
         if 0 <= layer_idx < len(model_base.model_block_modules):
             # Get self_attn module for specified layer
             attn_module = model_base.model_block_modules[layer_idx].self_attn
 
-            # Create ablation hook for this layer
-            ablation_hook = get_qwen3_attention_head_ablation_hook(layer_idx, head_indices)
+            # Create patching hook for this layer
+            patching_hook = get_qwen3_attention_patching_hook(
+                layer_idx, head_indices, harmless_attention_cache, sample_indices
+            )
 
             # Add to hooks list
-            ablation_hooks.append((attn_module, ablation_hook))
+            patching_hooks.append((attn_module, patching_hook))
 
-            print(f"  Layer {layer_idx}: ablating heads {head_indices}")
-        else:
-            print(f"  Warning: Layer {layer_idx} out of range, skipping")
-
-    return ablation_hooks
+    return patching_hooks
 
 
-def collect_activations_with_head_ablation(model_base, formatted_instructions: List[str],
-                                          direction: torch.Tensor, head_ablation_config: Dict,
-                                          batch_size: int = 8) -> Dict:
+
+
+
+
+def collect_activations_with_attention_patching(model_base, harmful_formatted_instructions: List[str],
+                                              harmless_formatted_instructions: List[str],
+                                              direction: torch.Tensor, head_config: Dict[int, List[int]],
+                                              batch_size: int = 8) -> Dict:
     """
-    Collect activations with attention head ablation applied.
+    Collect activations with attention head patching:
+    1. First collect harmless attention head outputs
+    2. Then process harmful instructions with patched attention heads
 
     Args:
         model_base: Model instance
-        formatted_instructions: List of template-formatted instructions
+        harmful_formatted_instructions: List of formatted harmful instructions
+        harmless_formatted_instructions: List of formatted harmless instructions
         direction: Refusal direction tensor
-        head_ablation_config: Dictionary of layer->heads to ablate
+        head_config: Dictionary of layer->heads to patch
         batch_size: Batch size for processing
 
     Returns:
         Dictionary with parallel components for each sample and layer
     """
-    print("Collecting activations with attention head ablation...")
+    print("Collecting activations with attention head patching...")
+
+    # Ensure equal length for one-to-one pairing
+    min_len = min(len(harmful_formatted_instructions), len(harmless_formatted_instructions))
+    harmful_instructions = harmful_formatted_instructions[:min_len]
+    harmless_instructions = harmless_formatted_instructions[:min_len]
+
+    print(f"Using {min_len} paired samples (harmful-harmless)")
+
+    # Stage 1: Collect harmless attention outputs
+    print("\n=== Stage 1: Collecting harmless attention head outputs ===")
+    harmless_attention_cache = collect_harmless_attention_outputs(
+        model_base, harmless_instructions, head_config, batch_size
+    )
+
+    # Stage 2: Process harmful instructions with patched attention heads
+    print("\n=== Stage 2: Processing harmful instructions with patched attention ===")
     results_cache = {}
     n_layers = model_base.model.config.num_hidden_layers
 
-    # Create ablation hooks
-    ablation_hooks = create_head_ablation_hooks(model_base, head_ablation_config)
+    for i in tqdm(range(0, len(harmful_instructions), batch_size), desc="Processing harmful with patching"):
+        batch_instructions = harmful_instructions[i:i+batch_size]
+        batch_sample_indices = list(range(i, i + len(batch_instructions)))
 
-    for i in tqdm(range(0, len(formatted_instructions), batch_size), desc="Processing batches with ablation"):
-        batch_instructions = formatted_instructions[i:i+batch_size]
-
-        # Tokenize
+        # Tokenize harmful instructions
         tokenized = model_base.tokenizer(
             batch_instructions,
             padding=True,
@@ -354,38 +535,44 @@ def collect_activations_with_head_ablation(model_base, formatted_instructions: L
             hook = get_parallel_component_hook(direction, results_cache, i, layer_idx)
             component_hooks.append((model_base.model_block_modules[layer_idx], hook))
 
-        # Forward pass with both ablation hooks and component collection hooks
+        # Create attention patching hooks
+        patching_hooks = create_attention_patching_hooks(
+            model_base, head_config, harmless_attention_cache, batch_sample_indices
+        )
+
+        # Forward pass with both patching hooks and component collection hooks
         with add_hooks(module_forward_pre_hooks=component_hooks,
-                      module_forward_hooks=ablation_hooks):
+                      module_forward_hooks=patching_hooks):
             with torch.no_grad():
                 _ = model_base.model(input_ids=input_ids, attention_mask=attention_mask)
 
         # Clear GPU memory
         torch.cuda.empty_cache()
 
+    print(f"Completed attention patching for {len(harmful_instructions)} samples")
     return results_cache
 
 
-def save_ablation_metadata(head_ablation_config: Dict, output_dir: str, length_suffix: str):
-    """Save ablation configuration metadata."""
+def save_patching_metadata(head_config: Dict, output_dir: str, length_suffix: str):
+    """Save attention patching configuration metadata."""
     # Ensure output directory exists
     os.makedirs(output_dir, exist_ok=True)
 
     metadata = {
-        "ablation_type": "attention_head_ablation",
+        "intervention_type": "attention_head_patching",
         "model": "Qwen3-14B",
         "total_layers": 40,
         "total_heads_per_layer": 40,
-        "ablation_config": head_ablation_config,
-        "ablated_layers": list(head_ablation_config.keys()),
-        "total_ablated_heads": sum(len(heads) for heads in head_ablation_config.values()),
+        "patching_config": head_config,
+        "patched_layers": list(head_config.keys()),
+        "total_patched_heads": sum(len(heads) for heads in head_config.values()),
         "length_suffix": length_suffix
     }
 
-    metadata_path = os.path.join(output_dir, "ablation_metadata.json")
+    metadata_path = os.path.join(output_dir, "patching_metadata.json")
     with open(metadata_path, 'w') as f:
         json.dump(metadata, f, indent=2)
-    print(f"Saved ablation metadata to {metadata_path}")
+    print(f"Saved patching metadata to {metadata_path}")
 
 
 def collect_activations_with_hooks(model_base, formatted_instructions: List[str], 
@@ -536,23 +723,26 @@ def main():
     parser.add_argument('--template_file', type=str, default='template_1k',
                        help='Template file to use (without .py extension, e.g., template_1k, template_11k)')
 
-    # Attention Head Ablation parameters
-    parser.add_argument('--enable_head_ablation', action='store_true',
-                       help='Enable attention head ablation during forward pass')
-    parser.add_argument('--ablation_output_dir', type=str, default='./results/head_ablation_results',
-                       help='Output directory for ablation results')
+    # Attention Head Patching parameters
+    parser.add_argument('--enable_attention_patching', action='store_true',
+                       help='Enable attention head patching (replace harmful with harmless)')
+    parser.add_argument('--patching_output_dir', type=str, default='./results/attention_patching_results',
+                       help='Output directory for attention patching results')
 
     args = parser.parse_args()
     
     print("Starting template-based harmful component analysis...")
-    if args.enable_head_ablation:
-        print("🎯 ATTENTION HEAD ABLATION ENABLED")
-        print(f"Will ablate {len(HEAD_ABLATION_CONFIG)} layers with {sum(len(heads) for heads in HEAD_ABLATION_CONFIG.values())} total heads")
+
+    if args.enable_attention_patching:
+        print("🔄 ATTENTION HEAD PATCHING ENABLED")
+        print(f"Will patch {len(HEAD_PATCHING_CONFIG)} layers with {sum(len(heads) for heads in HEAD_PATCHING_CONFIG.values())} total heads")
+        print("Harmless attention outputs will replace harmful ones")
+
     print(f"Model path: {args.model_path}")
     print(f"Direction path: {args.direction_path}")
     print(f"Output directory: {args.output_dir}")
     print(f"Template file: {args.template_file}")
-    
+
     # Load template module
     try:
         format_thinking_template = load_template_module(args.template_file)
@@ -561,75 +751,97 @@ def main():
     except Exception as e:
         print(f"Error loading template: {e}")
         return
-    
+
     # Create config object to match run_pipeline.py behavior
     model_alias = os.path.basename(args.model_path)
     cfg = Config(model_alias=model_alias, model_path=args.model_path)
     print(f"Using evaluation datasets: {cfg.evaluation_datasets}")
-    
+
     # Load refusal direction and metadata
     direction, metadata = load_refusal_direction(args.direction_path, args.metadata_path)
-    
-    # Setup model and data (only harmful)
-    model_base, harmful_instructions = setup_model_and_harmful_data(args.model_path, cfg)
-    
-    # Limit samples if specified
-    if args.n_samples > 0:
-        harmful_instructions = harmful_instructions[:args.n_samples]
-    
-    print(f"Processing {len(harmful_instructions)} harmful samples")
-    
-    # Format instructions with template
-    formatted_instructions = format_instructions_with_template(harmful_instructions, format_thinking_template)
 
-    # 🔥 Critical branch: Choose whether to use ablation
-    if args.enable_head_ablation:
-        print("\n=== 🎯 Running with Attention Head Ablation ===")
-        component_values = collect_activations_with_head_ablation(
-            model_base, formatted_instructions, direction, HEAD_ABLATION_CONFIG, args.batch_size
+    # Setup model and data
+    if args.enable_attention_patching:
+        # Load both harmful and harmless data for patching
+        model_base, harmful_instructions, harmless_instructions = setup_model_and_data(args.model_path, cfg)
+
+        # Limit samples if specified
+        if args.n_samples > 0:
+            harmful_instructions = harmful_instructions[:args.n_samples]
+            harmless_instructions = harmless_instructions[:args.n_samples]
+
+        print(f"Processing {len(harmful_instructions)} harmful samples")
+        print(f"Using {len(harmless_instructions)} harmless samples for patching")
+
+        # Format both harmful and harmless instructions with template
+        harmful_formatted_instructions = format_instructions_with_template(harmful_instructions, format_thinking_template)
+        harmless_formatted_instructions = format_instructions_with_template(harmless_instructions, format_thinking_template)
+
+    else:
+        # Load only harmful data for normal processing
+        model_base, harmful_instructions = setup_model_and_harmful_data(args.model_path, cfg)
+
+        # Limit samples if specified
+        if args.n_samples > 0:
+            harmful_instructions = harmful_instructions[:args.n_samples]
+
+        print(f"Processing {len(harmful_instructions)} harmful samples")
+
+        # Format instructions with template
+        harmful_formatted_instructions = format_instructions_with_template(harmful_instructions, format_thinking_template)
+
+    # 🔥 Critical branch: Choose processing method
+    if args.enable_attention_patching:
+        print("\n=== 🔄 Running with Attention Head Patching ===")
+        component_values = collect_activations_with_attention_patching(
+            model_base, harmful_formatted_instructions, harmless_formatted_instructions,
+            direction, HEAD_PATCHING_CONFIG, args.batch_size
         )
 
         # Use dedicated output directory and filename
-        output_dir = args.ablation_output_dir
-        ablation_suffix = "head_ablated"
-        final_length_suffix = f"{length_suffix}_{ablation_suffix}"
+        output_dir = args.patching_output_dir
+        intervention_suffix = "attention_patched"
+        final_length_suffix = f"{length_suffix}_{intervention_suffix}"
 
-        # Save ablation metadata
-        save_ablation_metadata(HEAD_ABLATION_CONFIG, output_dir, final_length_suffix)
+        # Save patching metadata
+        save_patching_metadata(HEAD_PATCHING_CONFIG, output_dir, final_length_suffix)
+
+        # Update metadata for saving
+        metadata.update({
+            "intervention_applied": "attention_head_patching",
+            "patching_config": HEAD_PATCHING_CONFIG,
+            "template_file": args.template_file,
+            "template_length": length_suffix,
+            "harmless_samples_used": len(harmless_formatted_instructions)
+        })
 
     else:
-        print("\n=== Running without Ablation ===")
+        print("\n=== Running without Intervention ===")
         component_values = collect_activations_with_hooks(
-            model_base, formatted_instructions, direction, args.batch_size
+            model_base, harmful_formatted_instructions, direction, args.batch_size
         )
         output_dir = args.output_dir
         final_length_suffix = length_suffix
 
-    # Organize and save results
-    n_layers = model_base.model.config.num_hidden_layers
-    if args.enable_head_ablation:
+        # Update metadata for saving
         metadata.update({
-            "ablation_applied": True,
-            "ablation_config": HEAD_ABLATION_CONFIG,
-            "template_file": args.template_file,
-            "template_length": length_suffix
-        })
-    else:
-        metadata.update({
-            "ablation_applied": False,
+            "intervention_applied": False,
             "template_file": args.template_file,
             "template_length": length_suffix
         })
 
-    results = organize_results(harmful_instructions, formatted_instructions,
+    # Organize and save results
+    n_layers = model_base.model.config.num_hidden_layers
+    results = organize_results(harmful_instructions, harmful_formatted_instructions,
                               component_values, n_layers, metadata)
 
     save_results(results, output_dir, final_length_suffix)
-    
+
     print(f"\n=== ✅ Analysis Complete ===")
     print(f"Results saved to {output_dir}")
-    if args.enable_head_ablation:
-        print(f"🎯 Ablation applied to {len(HEAD_ABLATION_CONFIG)} layers")
+    if args.enable_attention_patching:
+        print(f"🔄 Attention patching applied to {len(HEAD_PATCHING_CONFIG)} layers")
+        print(f"Used {len(harmless_formatted_instructions)} harmless samples for patching")
     print("Template-based harmful component calculation finished")
 
 

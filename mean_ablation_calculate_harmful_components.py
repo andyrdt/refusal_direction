@@ -224,6 +224,135 @@ def get_parallel_component_hook(direction: torch.Tensor, results_cache: Dict, ba
     return hook_fn
 
 
+def get_qwen3_true_undifferentiated_attention_hooks(layer_idx: int, head_indices_to_modify: List[int]):
+    """
+    Create TRUE causal undifferentiated attention hooks for Qwen3-14B model.
+
+    This implementation captures the input hidden states from transformer block level
+    and recomputes attention output using causal uniform attention weights.
+
+    Args:
+        layer_idx: Layer index (0-39)
+        head_indices_to_modify: List of head indices to make undifferentiated (0-39)
+
+    Returns:
+        Tuple of (block_pre_hook, attention_forward_hook) for capturing inputs and recomputing attention
+    """
+    # Cache to store hidden states between block pre-hook and attention forward-hook
+    # Use a unique cache per function instance to avoid conflicts
+    hidden_states_cache = {}
+
+    def block_pre_hook(module, input_tuple):
+        """Block pre-hook: Capture input hidden states from transformer block"""
+        try:
+            if len(input_tuple) == 0:
+                return input_tuple
+
+            # Transformer block forward signature: forward(hidden_states, ...)
+            hidden_states = input_tuple[0]  # First argument is hidden_states [batch, seq, hidden_size]
+
+            # Store in cache with layer-specific key
+            cache_key = f'layer_{layer_idx}_hidden_states'
+            hidden_states_cache[cache_key] = hidden_states.clone().detach()
+
+        except Exception as e:
+            print(f"Error in block pre-hook layer {layer_idx}: {e}")
+            import traceback
+            traceback.print_exc()
+        return input_tuple
+
+    def forward_hook(module, input_args, output):
+        """Forward-hook: Recompute attention with uniform weights for specified heads"""
+        try:
+            if isinstance(output, tuple):
+                attn_output = output[0]  # [batch, seq, hidden_size=5120]
+                other_outputs = output[1:]
+            else:
+                attn_output = output
+                other_outputs = ()
+
+            # Retrieve cached hidden states
+            cache_key = f'layer_{layer_idx}_hidden_states'
+            if cache_key not in hidden_states_cache:
+                print(f"Warning: No cached hidden states for layer {layer_idx}")
+                return output
+
+            hidden_states = hidden_states_cache[cache_key]
+            batch_size, seq_len, hidden_size = hidden_states.shape
+
+            # Qwen3-14B model parameters
+            num_heads = 40
+            head_dim = hidden_size // num_heads  # 128
+            num_key_value_heads = 8  # GQA: 8 key-value head groups
+            num_key_value_groups = num_heads // num_key_value_heads  # 5 heads per group
+
+            # Compute value states from original hidden states
+            value_states = module.v_proj(hidden_states)  # [batch, seq, 1024]
+            value_states = value_states.view(batch_size, seq_len, num_key_value_heads, head_dim)
+
+            # Reshape attention output to multi-head format for modification
+            reshaped_output = attn_output.view(batch_size, seq_len, num_heads, head_dim)
+
+            # Apply TRUE uniform attention for specified heads
+            for head_idx in head_indices_to_modify:
+                if 0 <= head_idx < num_heads:
+                    # Get corresponding key-value group for this query head (GQA)
+                    kv_group_idx = head_idx // num_key_value_groups
+                    head_values = value_states[:, :, kv_group_idx, :]  # [batch, seq, head_dim]
+
+                    # APPROACH: Use model's natural causal mask, but make attention uniform within allowed positions
+                    # We need to work with the model's existing causal attention logic
+
+                    # Since we can't easily extract the exact attention weights that were computed,
+                    # we'll create a causal uniform attention pattern that respects the standard causal mask
+
+                    # Create standard causal mask (lower triangular)
+                    causal_mask = torch.tril(torch.ones(
+                        seq_len, seq_len,
+                        device=attn_output.device,
+                        dtype=attn_output.dtype
+                    ))
+
+                    # Make attention uniform within the causal constraints
+                    # Each position attends uniformly to all allowed previous positions
+                    row_sums = causal_mask.sum(dim=-1, keepdim=True)  # [seq_len, 1]
+                    uniform_weights = causal_mask / row_sums  # [seq_len, seq_len]
+
+                    # Expand to batch dimension
+                    uniform_weights = uniform_weights.unsqueeze(0).expand(batch_size, -1, -1)
+
+                    # Compute uniform attention output: uniform_weights @ values
+                    true_uniform_output = torch.bmm(uniform_weights, head_values)
+
+                    # Replace the head output with true uniform attention result
+                    reshaped_output[:, :, head_idx, :] = true_uniform_output
+
+            # Reshape back to original format
+            modified_output = reshaped_output.view(batch_size, seq_len, hidden_size)
+
+            # Clean up cache to prevent memory leaks
+            if cache_key in hidden_states_cache:
+                del hidden_states_cache[cache_key]
+
+            # Return modified output
+            if other_outputs:
+                return (modified_output, *other_outputs)
+            else:
+                return modified_output
+
+        except Exception as e:
+            print(f"Error in true undifferentiated attention hook for layer {layer_idx}: {e}")
+            import traceback
+            traceback.print_exc()
+            # Clean up cache and return original output
+            cache_key = f'layer_{layer_idx}_hidden_states'
+            if cache_key in hidden_states_cache:
+                del hidden_states_cache[cache_key]
+            return output
+
+    return block_pre_hook, forward_hook
+
+
 def get_qwen3_attention_head_ablation_hook(layer_idx: int, head_indices_to_ablate: List[int]):
     """
     Create attention head ablation hook for Qwen3-14B model.
@@ -275,6 +404,43 @@ def get_qwen3_attention_head_ablation_hook(layer_idx: int, head_indices_to_ablat
             return ablated_output
 
     return hook_fn
+
+
+def create_head_undifferentiated_attention_hooks(model_base, head_config: Dict[int, List[int]]):
+    """
+    Create TRUE undifferentiated attention hooks that replace specified heads with uniform attention.
+
+    Args:
+        model_base: Qwen3 model instance
+        head_config: {layer_idx: [head_indices_to_make_undifferentiated]}
+
+    Returns:
+        Tuple of (pre_hooks, forward_hooks) for add_hooks
+    """
+    pre_hooks = []
+    forward_hooks = []
+
+    print(f"Creating TRUE undifferentiated attention hooks for {len(head_config)} layers...")
+
+    for layer_idx, head_indices in head_config.items():
+        if 0 <= layer_idx < len(model_base.model_block_modules):
+            # Get transformer block and attention module for specified layer
+            block_module = model_base.model_block_modules[layer_idx]
+            attn_module = block_module.self_attn
+
+            # Create true undifferentiated attention hooks for this layer
+            block_pre_hook, attention_forward_hook = get_qwen3_true_undifferentiated_attention_hooks(layer_idx, head_indices)
+
+            # Add block pre-hook to capture hidden states
+            pre_hooks.append((block_module, block_pre_hook))
+            # Add attention forward-hook to modify attention output
+            forward_hooks.append((attn_module, attention_forward_hook))
+
+            print(f"  Layer {layer_idx}: making heads {head_indices} TRULY undifferentiated")
+        else:
+            print(f"  Warning: Layer {layer_idx} out of range, skipping")
+
+    return pre_hooks, forward_hooks
 
 
 def create_head_ablation_hooks(model_base, head_ablation_config: Dict[int, List[int]]):
@@ -364,6 +530,89 @@ def collect_activations_with_head_ablation(model_base, formatted_instructions: L
         torch.cuda.empty_cache()
 
     return results_cache
+
+
+def collect_activations_with_undifferentiated_attention(model_base, formatted_instructions: List[str],
+                                                       direction: torch.Tensor, head_config: Dict,
+                                                       batch_size: int = 8) -> Dict:
+    """
+    Collect activations with TRUE undifferentiated attention applied to specified heads.
+
+    Args:
+        model_base: Model instance
+        formatted_instructions: List of template-formatted instructions
+        direction: Refusal direction tensor
+        head_config: Dictionary of layer->heads to make undifferentiated
+        batch_size: Batch size for processing
+
+    Returns:
+        Dictionary with parallel components for each sample and layer
+    """
+    print("Collecting activations with TRUE undifferentiated attention...")
+    results_cache = {}
+    n_layers = model_base.model.config.num_hidden_layers
+
+    # Create TRUE undifferentiated attention hooks (pre-hook + forward-hook combination)
+    undifferentiated_pre_hooks, undifferentiated_forward_hooks = create_head_undifferentiated_attention_hooks(model_base, head_config)
+
+    for i in tqdm(range(0, len(formatted_instructions), batch_size), desc="Processing batches with TRUE undifferentiated attention"):
+        batch_instructions = formatted_instructions[i:i+batch_size]
+
+        # Tokenize
+        tokenized = model_base.tokenizer(
+            batch_instructions,
+            padding=True,
+            truncation=True,
+            return_tensors='pt',
+            add_special_tokens=False
+        )
+
+        input_ids = tokenized.input_ids.to(model_base.model.device)
+        attention_mask = tokenized.attention_mask.to(model_base.model.device)
+
+        # Create parallel component collection hooks (one per layer for the batch)
+        component_hooks = []
+        for layer_idx in range(n_layers):
+            hook = get_parallel_component_hook(direction, results_cache, i, layer_idx)
+            component_hooks.append((model_base.model_block_modules[layer_idx], hook))
+
+        # Combine all hooks: component collection (pre) + undifferentiated attention (pre + forward)
+        all_pre_hooks = component_hooks + undifferentiated_pre_hooks
+        all_forward_hooks = undifferentiated_forward_hooks
+
+        # Forward pass with both undifferentiated attention hooks and component collection hooks
+        with add_hooks(module_forward_pre_hooks=all_pre_hooks,
+                      module_forward_hooks=all_forward_hooks):
+            with torch.no_grad():
+                _ = model_base.model(input_ids=input_ids, attention_mask=attention_mask)
+
+        # Clear GPU memory
+        torch.cuda.empty_cache()
+
+    return results_cache
+
+
+def save_undifferentiated_attention_metadata(head_config: Dict, output_dir: str, length_suffix: str):
+    """Save undifferentiated attention configuration metadata."""
+    # Ensure output directory exists
+    os.makedirs(output_dir, exist_ok=True)
+
+    metadata = {
+        "intervention_type": "undifferentiated_attention",
+        "model": "Qwen3-14B",
+        "total_layers": 40,
+        "total_heads_per_layer": 40,
+        "undifferentiated_config": head_config,
+        "modified_layers": list(head_config.keys()),
+        "total_modified_heads": sum(len(heads) for heads in head_config.values()),
+        "length_suffix": length_suffix,
+        "description": "Causal uniform attention weights applied to specified heads. Each position attends uniformly to all previous positions (including itself), respecting causality."
+    }
+
+    metadata_path = os.path.join(output_dir, "undifferentiated_attention_metadata.json")
+    with open(metadata_path, 'w') as f:
+        json.dump(metadata, f, indent=2)
+    print(f"Saved undifferentiated attention metadata to {metadata_path}")
 
 
 def save_ablation_metadata(head_ablation_config: Dict, output_dir: str, length_suffix: str):
@@ -532,22 +781,36 @@ def main():
                        help='Path to direction_metadata.json')
     parser.add_argument('--output_dir', type=str, default='./results', help='Output directory')
     parser.add_argument('--batch_size', type=int, default=1, help='Batch size for processing')
-    parser.add_argument('--n_samples', type=int, default=50, help='Number of samples (0 for all)')
+    parser.add_argument('--n_samples', type=int, default=10, help='Number of samples (0 for all)')
     parser.add_argument('--template_file', type=str, default='template_1k',
                        help='Template file to use (without .py extension, e.g., template_1k, template_11k)')
 
-    # Attention Head Ablation parameters
+    # Attention Head Intervention parameters
     parser.add_argument('--enable_head_ablation', action='store_true',
-                       help='Enable attention head ablation during forward pass')
+                       help='Enable attention head ablation during forward pass (set heads to zero)')
+    parser.add_argument('--enable_undifferentiated_attention', action='store_true',
+                       help='Enable undifferentiated attention (uniform attention weights for specified heads)')
     parser.add_argument('--ablation_output_dir', type=str, default='./results/head_ablation_results',
                        help='Output directory for ablation results')
+    parser.add_argument('--undifferentiated_output_dir', type=str, default='./results/undifferentiated_attention_results',
+                       help='Output directory for undifferentiated attention results')
 
     args = parser.parse_args()
     
     print("Starting template-based harmful component analysis...")
+
+    # Validate intervention arguments
+    if args.enable_head_ablation and args.enable_undifferentiated_attention:
+        print("❌ ERROR: Cannot enable both head ablation and undifferentiated attention simultaneously")
+        return
+
     if args.enable_head_ablation:
         print("🎯 ATTENTION HEAD ABLATION ENABLED")
         print(f"Will ablate {len(HEAD_ABLATION_CONFIG)} layers with {sum(len(heads) for heads in HEAD_ABLATION_CONFIG.values())} total heads")
+    elif args.enable_undifferentiated_attention:
+        print("🔄 UNDIFFERENTIATED ATTENTION ENABLED")
+        print(f"Will apply uniform attention to {len(HEAD_ABLATION_CONFIG)} layers with {sum(len(heads) for heads in HEAD_ABLATION_CONFIG.values())} total heads")
+
     print(f"Model path: {args.model_path}")
     print(f"Direction path: {args.direction_path}")
     print(f"Output directory: {args.output_dir}")
@@ -582,7 +845,7 @@ def main():
     # Format instructions with template
     formatted_instructions = format_instructions_with_template(harmful_instructions, format_thinking_template)
 
-    # 🔥 Critical branch: Choose whether to use ablation
+    # 🔥 Critical branch: Choose intervention type
     if args.enable_head_ablation:
         print("\n=== 🎯 Running with Attention Head Ablation ===")
         component_values = collect_activations_with_head_ablation(
@@ -591,35 +854,59 @@ def main():
 
         # Use dedicated output directory and filename
         output_dir = args.ablation_output_dir
-        ablation_suffix = "head_ablated"
-        final_length_suffix = f"{length_suffix}_{ablation_suffix}"
+        intervention_suffix = "head_ablated"
+        final_length_suffix = f"{length_suffix}_{intervention_suffix}"
 
         # Save ablation metadata
         save_ablation_metadata(HEAD_ABLATION_CONFIG, output_dir, final_length_suffix)
 
+        # Update metadata for saving
+        metadata.update({
+            "intervention_applied": "head_ablation",
+            "intervention_config": HEAD_ABLATION_CONFIG,
+            "template_file": args.template_file,
+            "template_length": length_suffix
+        })
+
+    elif args.enable_undifferentiated_attention:
+        print("\n=== 🔄 Running with Undifferentiated Attention ===")
+        component_values = collect_activations_with_undifferentiated_attention(
+            model_base, formatted_instructions, direction, HEAD_ABLATION_CONFIG, args.batch_size
+        )
+
+        # Use dedicated output directory and filename
+        output_dir = args.undifferentiated_output_dir
+        intervention_suffix = "undifferentiated"
+        final_length_suffix = f"{length_suffix}_{intervention_suffix}"
+
+        # Save undifferentiated attention metadata
+        save_undifferentiated_attention_metadata(HEAD_ABLATION_CONFIG, output_dir, final_length_suffix)
+
+        # Update metadata for saving
+        metadata.update({
+            "intervention_applied": "undifferentiated_attention",
+            "intervention_config": HEAD_ABLATION_CONFIG,
+            "template_file": args.template_file,
+            "template_length": length_suffix
+        })
+
     else:
-        print("\n=== Running without Ablation ===")
+        print("\n=== Running without Intervention ===")
         component_values = collect_activations_with_hooks(
             model_base, formatted_instructions, direction, args.batch_size
         )
         output_dir = args.output_dir
         final_length_suffix = length_suffix
 
+        # Update metadata for saving
+        metadata.update({
+            "intervention_applied": False,
+            "template_file": args.template_file,
+            "template_length": length_suffix
+        })
+
     # Organize and save results
     n_layers = model_base.model.config.num_hidden_layers
-    if args.enable_head_ablation:
-        metadata.update({
-            "ablation_applied": True,
-            "ablation_config": HEAD_ABLATION_CONFIG,
-            "template_file": args.template_file,
-            "template_length": length_suffix
-        })
-    else:
-        metadata.update({
-            "ablation_applied": False,
-            "template_file": args.template_file,
-            "template_length": length_suffix
-        })
 
     results = organize_results(harmful_instructions, formatted_instructions,
                               component_values, n_layers, metadata)
@@ -628,8 +915,13 @@ def main():
     
     print(f"\n=== ✅ Analysis Complete ===")
     print(f"Results saved to {output_dir}")
+
     if args.enable_head_ablation:
-        print(f"🎯 Ablation applied to {len(HEAD_ABLATION_CONFIG)} layers")
+        print(f"🎯 Head ablation applied to {len(HEAD_ABLATION_CONFIG)} layers")
+    elif args.enable_undifferentiated_attention:
+        print(f"🔄 Undifferentiated attention applied to {len(HEAD_ABLATION_CONFIG)} layers")
+        print("   Specified heads now use causal uniform attention weights (respecting causality)")
+
     print("Template-based harmful component calculation finished")
 
 
