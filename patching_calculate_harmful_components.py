@@ -30,53 +30,53 @@ import re
 
 
 # 60 heads
-# HEAD_PATCHING_CONFIG = {
-#     15: [23],
-#     18: [1, 4, 19],
-#     19: [12, 14],
-#     20: [29, 35, 37],
-#     21: [1, 11, 18, 19],
-#     22: [17, 24, 26, 29, 35],
-#     23: [11],
-#     24: [1, 22, 35, 38],
-#     25: [36],
-#     26: [18, 21, 23],
-#     27: [3, 23, 32, 34],
-#     28: [4, 21, 30, 32, 35],
-#     29: [3, 10, 20, 21],
-#     30: [8, 13],
-#     31: [9, 13, 16, 19, 24],
-#     32: [0, 6, 13, 27, 28],
-#     33: [8, 17, 22, 25],
-#     34: [8, 36],
-#     35: [6, 12]
-# }
+HEAD_PATCHING_CONFIG = {
+    15: [23],
+    18: [1, 4, 19],
+    19: [12, 14],
+    20: [29, 35, 37],
+    21: [1, 11, 18, 19],
+    22: [17, 24, 26, 29, 35],
+    23: [11],
+    24: [1, 22, 35, 38],
+    25: [36],
+    26: [18, 21, 23],
+    27: [3, 23, 32, 34],
+    28: [4, 21, 30, 32, 35],
+    29: [3, 10, 20, 21],
+    30: [8, 13],
+    31: [9, 13, 16, 19, 24],
+    32: [0, 6, 13, 27, 28],
+    33: [8, 17, 22, 25],
+    34: [8, 36],
+    35: [6, 12]
+}
 
 
 # 100 heads
-HEAD_PATCHING_CONFIG = {
-    15: [6, 15, 23],
-    16: [27, 37, 39],
-    17: [30],
-    18: [1, 4, 17, 19, 33],
-    19: [12, 14, 20, 22, 35],
-    20: [29, 35, 37],
-    21: [1, 11, 14, 18, 19, 30],
-    22: [17, 24, 26, 29, 35],
-    23: [4, 11, 13, 33],
-    24: [1, 3, 15, 22, 28, 29, 35, 38],
-    25: [36, 39],
-    26: [18, 21, 23, 36],
-    27: [3, 17, 23, 32, 34],
-    28: [4, 21, 30, 32, 35],
-    29: [3, 10, 20, 21, 30, 31],
-    30: [8, 13],
-    31: [4, 9, 13, 16, 19, 23, 24, 25, 39],
-    32: [0, 6, 9, 13, 27, 28, 37],
-    33: [5, 8, 17, 22, 25, 29],
-    34: [8, 10, 16, 36],
-    35: [2, 6, 9, 12, 19, 31, 34]
-}
+# HEAD_PATCHING_CONFIG = {
+#     15: [6, 15, 23],
+#     16: [27, 37, 39],
+#     17: [30],
+#     18: [1, 4, 17, 19, 33],
+#     19: [12, 14, 20, 22, 35],
+#     20: [29, 35, 37],
+#     21: [1, 11, 14, 18, 19, 30],
+#     22: [17, 24, 26, 29, 35],
+#     23: [4, 11, 13, 33],
+#     24: [1, 3, 15, 22, 28, 29, 35, 38],
+#     25: [36, 39],
+#     26: [18, 21, 23, 36],
+#     27: [3, 17, 23, 32, 34],
+#     28: [4, 21, 30, 32, 35],
+#     29: [3, 10, 20, 21, 30, 31],
+#     30: [8, 13],
+#     31: [4, 9, 13, 16, 19, 23, 24, 25, 39],
+#     32: [0, 6, 9, 13, 27, 28, 37],
+#     33: [5, 8, 17, 22, 25, 29],
+#     34: [8, 10, 16, 36],
+#     35: [2, 6, 9, 12, 19, 31, 34]
+# }
 
 
 def extract_length_from_filename(template_name: str) -> str:
@@ -270,6 +270,11 @@ def get_qwen3_harmless_attention_collection_hook(layer_idx: int, head_indices: L
     """
     Create hook to collect attention head outputs from harmless instructions.
 
+    WARNING: This implementation is mathematically INCORRECT!
+    It collects attention outputs AFTER the Wo linear transformation and tries to
+    separate heads by reshaping, which doesn't work correctly.
+    Use get_correct_qwen3_harmless_attention_collection_hook() instead.
+
     Args:
         layer_idx: Layer index (0-39)
         head_indices: List of head indices to collect (0-39)
@@ -317,6 +322,10 @@ def get_qwen3_attention_patching_hook(layer_idx: int, head_indices: List[int], h
     """
     Create attention head patching hook that replaces harmful attention heads with harmless ones.
 
+    WARNING: This implementation is mathematically INCORRECT!
+    It performs patching AFTER the Wo linear transformation, which doesn't properly
+    replace individual head outputs. Use get_correct_qwen3_attention_patching_hook() instead.
+
     Args:
         layer_idx: Layer index (0-39)
         head_indices: List of head indices to patch (0-39)
@@ -326,6 +335,9 @@ def get_qwen3_attention_patching_hook(layer_idx: int, head_indices: List[int], h
     Returns:
         Hook function for attention head patching
     """
+    print(f"⚠️  WARNING: Using mathematically incorrect patching for layer {layer_idx}!")
+    print("   This patches AFTER Wo transformation, not individual heads.")
+    print("   Use --use_correct_patching for mathematically correct implementation.")
     def hook_fn(module, input, output):
         # Qwen3 self_attn output: (attention_output, attention_weights, past_key_value)
         if isinstance(output, tuple):
@@ -380,12 +392,193 @@ def get_qwen3_attention_patching_hook(layer_idx: int, head_indices: List[int], h
     return hook_fn
 
 
+def get_correct_qwen3_harmless_attention_collection_hook(layer_idx: int, head_indices: List[int], harmless_attention_cache: Dict, sample_indices: List[int]):
+    """
+    Create a monkey patch function that collects attention heads correctly.
+    Each layer gets its own independent monkey patch with fixed parameters.
+
+    Args:
+        layer_idx: Layer index (0-39)
+        head_indices: List of head indices to collect (0-39)
+        harmless_attention_cache: Cache to store harmless attention outputs
+        sample_indices: List of sample indices for current batch
+
+    Returns:
+        Monkey patch function that replaces the forward method
+    """
+    def create_patched_forward(original_forward):
+        def patched_forward(self, hidden_states, position_embeddings, attention_mask, **kwargs):
+            input_shape = hidden_states.shape[:-1]
+            hidden_shape = (*input_shape, -1, self.head_dim)
+
+            query_states = self.q_norm(self.q_proj(hidden_states).view(hidden_shape)).transpose(1, 2)
+            key_states = self.k_norm(self.k_proj(hidden_states).view(hidden_shape)).transpose(1, 2)
+            value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+
+            cos, sin = position_embeddings
+            from transformers.models.qwen3.modeling_qwen3 import apply_rotary_pos_emb
+            query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+
+            # Handle past_key_value if present
+            past_key_value = kwargs.get('past_key_value')
+            cache_position = kwargs.get('cache_position')
+            if past_key_value is not None:
+                cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
+                key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+
+            # Get attention interface and compute attention
+            from transformers.models.qwen3.modeling_qwen3 import ALL_ATTENTION_FUNCTIONS, eager_attention_forward
+            attention_interface = eager_attention_forward
+            if self.config._attn_implementation != "eager":
+                attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
+
+            attn_output, attn_weights = attention_interface(
+                self,
+                query_states,
+                key_states,
+                value_states,
+                attention_mask,
+                dropout=0.0 if not self.training else self.attention_dropout,
+                scaling=self.scaling,
+                sliding_window=self.sliding_window,
+                **kwargs,
+            )
+
+            # Collect attention head outputs for THIS SPECIFIC layer only
+            # Using closure variables: layer_idx, head_indices, harmless_attention_cache, sample_indices
+            batch_size = attn_output.shape[0]
+
+            # Initialize cache structure if needed
+            if layer_idx not in harmless_attention_cache:
+                harmless_attention_cache[layer_idx] = {}
+
+            # Collect specified attention heads for each sample in batch
+            for batch_idx in range(batch_size):
+                if batch_idx < len(sample_indices):
+                    sample_idx = sample_indices[batch_idx]
+                    if sample_idx not in harmless_attention_cache[layer_idx]:
+                        harmless_attention_cache[layer_idx][sample_idx] = {}
+
+                    for head_idx in head_indices:
+                        if 0 <= head_idx < attn_output.shape[1]:
+                            # Store head output: [seq, head_dim] -> move to CPU to save GPU memory
+                            head_output = attn_output[batch_idx, head_idx, :, :].detach().cpu()
+                            harmless_attention_cache[layer_idx][sample_idx][head_idx] = head_output
+
+            # Continue with original processing
+            attn_output = attn_output.reshape(*input_shape, -1).contiguous()
+            attn_output = self.o_proj(attn_output)
+            return attn_output, attn_weights
+
+        return patched_forward
+
+    return create_patched_forward
+
+
+def get_correct_qwen3_attention_patching_hook(layer_idx: int, head_indices: List[int], harmless_attention_cache: Dict, sample_indices: List[int]):
+    """
+    Create a monkey patch function that performs attention head patching correctly.
+    Each layer gets its own independent monkey patch with fixed parameters.
+
+    Args:
+        layer_idx: Layer index (0-39)
+        head_indices: List of head indices to patch (0-39)
+        harmless_attention_cache: Cache containing harmless attention outputs
+        sample_indices: List of sample indices for current batch
+
+    Returns:
+        Monkey patch function that replaces the forward method
+    """
+    def create_patched_forward(original_forward):
+        def patched_forward(self, hidden_states, position_embeddings, attention_mask, **kwargs):
+            input_shape = hidden_states.shape[:-1]
+            hidden_shape = (*input_shape, -1, self.head_dim)
+
+            query_states = self.q_norm(self.q_proj(hidden_states).view(hidden_shape)).transpose(1, 2)
+            key_states = self.k_norm(self.k_proj(hidden_states).view(hidden_shape)).transpose(1, 2)
+            value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+
+            cos, sin = position_embeddings
+            from transformers.models.qwen3.modeling_qwen3 import apply_rotary_pos_emb
+            query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+
+            # Handle past_key_value if present
+            past_key_value = kwargs.get('past_key_value')
+            cache_position = kwargs.get('cache_position')
+            if past_key_value is not None:
+                cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
+                key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+
+            # Get attention interface and compute attention
+            from transformers.models.qwen3.modeling_qwen3 import ALL_ATTENTION_FUNCTIONS, eager_attention_forward
+            attention_interface = eager_attention_forward
+            if self.config._attn_implementation != "eager":
+                attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
+
+            attn_output, attn_weights = attention_interface(
+                self,
+                query_states,
+                key_states,
+                value_states,
+                attention_mask,
+                dropout=0.0 if not self.training else self.attention_dropout,
+                scaling=self.scaling,
+                sliding_window=self.sliding_window,
+                **kwargs,
+            )
+
+            # Perform attention head patching for THIS SPECIFIC layer only
+            # Using closure variables: layer_idx, head_indices, harmless_attention_cache, sample_indices
+            if layer_idx in harmless_attention_cache:
+                batch_size = attn_output.shape[0]
+                seq_len = attn_output.shape[2]
+                head_dim = attn_output.shape[3]
+
+                for batch_idx in range(batch_size):
+                    if batch_idx < len(sample_indices):
+                        sample_idx = sample_indices[batch_idx]
+                        if sample_idx in harmless_attention_cache[layer_idx]:
+                            for head_idx in head_indices:
+                                if (0 <= head_idx < attn_output.shape[1] and
+                                    head_idx in harmless_attention_cache[layer_idx][sample_idx]):
+                                    # Get harmless attention output and move to current device
+                                    harmless_head_output = harmless_attention_cache[layer_idx][sample_idx][head_idx]
+                                    harmless_head_output = harmless_head_output.to(device=attn_output.device, dtype=attn_output.dtype)
+
+                                    # Ensure sequence length matches (truncate or pad as needed)
+                                    if harmless_head_output.shape[0] != seq_len:
+                                        if harmless_head_output.shape[0] > seq_len:
+                                            harmless_head_output = harmless_head_output[:seq_len, :]
+                                        else:
+                                            # Pad with zeros if harmless sequence is shorter
+                                            pad_length = seq_len - harmless_head_output.shape[0]
+                                            padding = torch.zeros(pad_length, head_dim, device=attn_output.device, dtype=attn_output.dtype)
+                                            harmless_head_output = torch.cat([harmless_head_output, padding], dim=0)
+
+                                    # Replace the head output
+                                    attn_output[batch_idx, head_idx, :, :] = harmless_head_output
+
+            # Continue with original processing
+            attn_output = attn_output.reshape(*input_shape, -1).contiguous()
+            attn_output = self.o_proj(attn_output)
+            return attn_output, attn_weights
+
+        return patched_forward
+
+    return create_patched_forward
+
+
 
 
 def collect_harmless_attention_outputs(model_base, harmless_formatted_instructions: List[str],
                                      head_config: Dict[int, List[int]], batch_size: int = 8) -> Dict:
     """
     Collect attention head outputs from harmless instructions.
+
+    WARNING: This implementation is mathematically INCORRECT!
+    It collects attention outputs AFTER the Wo linear transformation and tries to
+    separate heads by reshaping, which doesn't work correctly.
+    Use collect_correct_harmless_attention_outputs() instead.
 
     Args:
         model_base: Model instance
@@ -396,6 +589,8 @@ def collect_harmless_attention_outputs(model_base, harmless_formatted_instructio
     Returns:
         Dictionary containing harmless attention outputs: {layer_idx: {sample_idx: {head_idx: tensor}}}
     """
+    print("⚠️  WARNING: Using legacy harmless attention collection (AFTER Wo transformation)")
+    print("   This is mathematically incorrect! Use --use_correct_patching for correct results.")
     print("Collecting attention outputs from harmless instructions...")
     harmless_attention_cache = {}
 
@@ -728,6 +923,8 @@ def main():
                        help='Enable attention head patching (replace harmful with harmless)')
     parser.add_argument('--patching_output_dir', type=str, default='./results/attention_patching_results',
                        help='Output directory for attention patching results')
+    parser.add_argument('--use_correct_patching', action='store_true',
+                       help='Use mathematically correct patching (BEFORE o_proj transformation)')
 
     args = parser.parse_args()
     
@@ -737,6 +934,11 @@ def main():
         print("🔄 ATTENTION HEAD PATCHING ENABLED")
         print(f"Will patch {len(HEAD_PATCHING_CONFIG)} layers with {sum(len(heads) for heads in HEAD_PATCHING_CONFIG.values())} total heads")
         print("Harmless attention outputs will replace harmful ones")
+        if args.use_correct_patching:
+            print("✅ Using CORRECT implementation (patching BEFORE o_proj)")
+        else:
+            print("⚠️  Using LEGACY implementation (patching AFTER o_proj)")
+            print("   Add --use_correct_patching for mathematically correct results")
 
     print(f"Model path: {args.model_path}")
     print(f"Direction path: {args.direction_path}")
@@ -792,15 +994,26 @@ def main():
 
     # 🔥 Critical branch: Choose processing method
     if args.enable_attention_patching:
-        print("\n=== 🔄 Running with Attention Head Patching ===")
-        component_values = collect_activations_with_attention_patching(
-            model_base, harmful_formatted_instructions, harmless_formatted_instructions,
-            direction, HEAD_PATCHING_CONFIG, args.batch_size
-        )
+        if args.use_correct_patching:
+            print("\n=== 🔄 Running with CORRECT Attention Head Patching ===")
+            print("✅ Using mathematically correct implementation (patching BEFORE o_proj)")
+            component_values = collect_activations_with_correct_attention_patching(
+                model_base, harmful_formatted_instructions, harmless_formatted_instructions,
+                direction, HEAD_PATCHING_CONFIG, args.batch_size
+            )
+            intervention_suffix = "correct_attention_patched"
+        else:
+            print("\n=== 🔄 Running with Legacy Attention Head Patching ===")
+            print("⚠️  WARNING: Using legacy implementation (patching AFTER o_proj)")
+            print("   This is mathematically incorrect! Use --use_correct_patching for correct results.")
+            component_values = collect_activations_with_attention_patching(
+                model_base, harmful_formatted_instructions, harmless_formatted_instructions,
+                direction, HEAD_PATCHING_CONFIG, args.batch_size
+            )
+            intervention_suffix = "legacy_attention_patched"
 
         # Use dedicated output directory and filename
         output_dir = args.patching_output_dir
-        intervention_suffix = "attention_patched"
         final_length_suffix = f"{length_suffix}_{intervention_suffix}"
 
         # Save patching metadata
@@ -809,6 +1022,7 @@ def main():
         # Update metadata for saving
         metadata.update({
             "intervention_applied": "attention_head_patching",
+            "patching_implementation": "correct" if args.use_correct_patching else "legacy",
             "patching_config": HEAD_PATCHING_CONFIG,
             "template_file": args.template_file,
             "template_length": length_suffix,
@@ -843,6 +1057,214 @@ def main():
         print(f"🔄 Attention patching applied to {len(HEAD_PATCHING_CONFIG)} layers")
         print(f"Used {len(harmless_formatted_instructions)} harmless samples for patching")
     print("Template-based harmful component calculation finished")
+
+
+def collect_correct_harmless_attention_outputs(model_base, harmless_formatted_instructions: List[str],
+                                              head_config: Dict[int, List[int]], batch_size: int = 8) -> Dict:
+    """
+    Collect attention head outputs from harmless instructions using correct implementation.
+    This collects attention head outputs BEFORE the o_proj transformation.
+
+    Args:
+        model_base: Model instance
+        harmless_formatted_instructions: List of formatted harmless instructions
+        head_config: Dictionary of layer->heads to collect
+        batch_size: Batch size for processing
+
+    Returns:
+        Dictionary containing harmless attention outputs: {layer_idx: {sample_idx: {head_idx: tensor}}}
+    """
+    print("Collecting attention outputs from harmless instructions using CORRECT implementation...")
+    harmless_attention_cache = {}
+
+    # Store original forward methods for restoration
+    original_forwards = {}
+    for layer_idx in head_config.keys():
+        if 0 <= layer_idx < len(model_base.model_block_modules):
+            attn_module = model_base.model_block_modules[layer_idx].self_attn
+            original_forwards[layer_idx] = attn_module.forward
+
+    try:
+        for i in tqdm(range(0, len(harmless_formatted_instructions), batch_size), desc="Collecting harmless attention"):
+            batch_instructions = harmless_formatted_instructions[i:i+batch_size]
+            batch_sample_indices = list(range(i, i + len(batch_instructions)))
+
+            # Tokenize
+            tokenized = model_base.tokenizer(
+                batch_instructions,
+                padding=True,
+                truncation=True,
+                return_tensors='pt',
+                add_special_tokens=False
+            )
+
+            input_ids = tokenized.input_ids.to(model_base.model.device)
+            attention_mask = tokenized.attention_mask.to(model_base.model.device)
+
+            # Apply monkey patches for collection (no hooks needed)
+            for layer_idx, head_indices in head_config.items():
+                if 0 <= layer_idx < len(model_base.model_block_modules):
+                    attn_module = model_base.model_block_modules[layer_idx].self_attn
+                    patch_forward_fn = get_correct_qwen3_harmless_attention_collection_hook(
+                        layer_idx, head_indices, harmless_attention_cache, batch_sample_indices
+                    )
+
+                    # Apply monkey patch with proper method binding
+                    import types
+                    patched_method = patch_forward_fn(original_forwards[layer_idx])
+                    attn_module.forward = types.MethodType(patched_method, attn_module)
+
+            # Forward pass with patched attention methods (no additional hooks needed)
+            with torch.no_grad():
+                _ = model_base.model(input_ids=input_ids, attention_mask=attention_mask)
+
+            # Clear GPU memory
+            torch.cuda.empty_cache()
+
+    finally:
+        # Restore original forward methods
+        for layer_idx, original_forward in original_forwards.items():
+            if 0 <= layer_idx < len(model_base.model_block_modules):
+                attn_module = model_base.model_block_modules[layer_idx].self_attn
+                attn_module.forward = original_forward
+
+    print(f"Collected attention outputs for {len(harmless_formatted_instructions)} harmless samples")
+    return harmless_attention_cache
+
+
+def create_correct_attention_patching_hooks(model_base, head_config: Dict[int, List[int]],
+                                          harmless_attention_cache: Dict, sample_indices: List[int]):
+    """
+    Create correct attention head patching using monkey patches.
+    This performs patching BEFORE the o_proj transformation.
+
+    Args:
+        model_base: Qwen3 model instance
+        head_config: {layer_idx: [head_indices_to_patch]}
+        harmless_attention_cache: Cache of harmless attention outputs
+        sample_indices: List of sample indices for current batch
+
+    Returns:
+        Dictionary of original forward methods for restoration
+    """
+    original_forwards = {}
+
+    for layer_idx, head_indices in head_config.items():
+        if 0 <= layer_idx < len(model_base.model_block_modules):
+            # Get self_attn module for specified layer
+            attn_module = model_base.model_block_modules[layer_idx].self_attn
+
+            # Store original forward method
+            original_forwards[layer_idx] = attn_module.forward
+
+            # Create patching function for this layer
+            patch_forward_fn = get_correct_qwen3_attention_patching_hook(
+                layer_idx, head_indices, harmless_attention_cache, sample_indices
+            )
+
+            # Apply monkey patch with proper method binding
+            import types
+            patched_method = patch_forward_fn(original_forwards[layer_idx])
+            attn_module.forward = types.MethodType(patched_method, attn_module)
+
+    return original_forwards
+
+
+def restore_attention_forward_methods(model_base, original_forwards: Dict):
+    """
+    Restore original attention forward methods after patching.
+
+    Args:
+        model_base: Qwen3 model instance
+        original_forwards: Dictionary of layer_idx -> original forward method
+    """
+    for layer_idx, original_forward in original_forwards.items():
+        if 0 <= layer_idx < len(model_base.model_block_modules):
+            attn_module = model_base.model_block_modules[layer_idx].self_attn
+            attn_module.forward = original_forward
+
+
+def collect_activations_with_correct_attention_patching(model_base, harmful_formatted_instructions: List[str],
+                                                       harmless_formatted_instructions: List[str],
+                                                       direction: torch.Tensor, head_config: Dict[int, List[int]],
+                                                       batch_size: int = 8) -> Dict:
+    """
+    Collect activations with CORRECT attention head patching:
+    1. First collect harmless attention head outputs (BEFORE o_proj)
+    2. Then process harmful instructions with patched attention heads (BEFORE o_proj)
+
+    Args:
+        model_base: Model instance
+        harmful_formatted_instructions: List of formatted harmful instructions
+        harmless_formatted_instructions: List of formatted harmless instructions
+        direction: Refusal direction tensor
+        head_config: Dictionary of layer->heads to patch
+        batch_size: Batch size for processing
+
+    Returns:
+        Dictionary with parallel components for each sample and layer
+    """
+    print("Collecting activations with CORRECT attention head patching...")
+
+    # Ensure equal length for one-to-one pairing
+    min_len = min(len(harmful_formatted_instructions), len(harmless_formatted_instructions))
+    harmful_instructions = harmful_formatted_instructions[:min_len]
+    harmless_instructions = harmless_formatted_instructions[:min_len]
+
+    print(f"Using {min_len} paired samples (harmful-harmless)")
+
+    # Stage 1: Collect harmless attention outputs using CORRECT implementation
+    print("\n=== Stage 1: Collecting harmless attention head outputs (CORRECT) ===")
+    harmless_attention_cache = collect_correct_harmless_attention_outputs(
+        model_base, harmless_instructions, head_config, batch_size
+    )
+
+    # Stage 2: Process harmful instructions with patched attention heads
+    print("\n=== Stage 2: Processing harmful instructions with CORRECT patched attention ===")
+    results_cache = {}
+    n_layers = model_base.model.config.num_hidden_layers
+
+    for i in tqdm(range(0, len(harmful_instructions), batch_size), desc="Processing harmful with CORRECT patching"):
+        batch_instructions = harmful_instructions[i:i+batch_size]
+        batch_sample_indices = list(range(i, i + len(batch_instructions)))
+
+        # Tokenize harmful instructions
+        tokenized = model_base.tokenizer(
+            batch_instructions,
+            padding=True,
+            truncation=True,
+            return_tensors='pt',
+            add_special_tokens=False
+        )
+
+        input_ids = tokenized.input_ids.to(model_base.model.device)
+        attention_mask = tokenized.attention_mask.to(model_base.model.device)
+
+        # Create parallel component collection hooks (one per layer for the batch)
+        component_hooks = []
+        for layer_idx in range(n_layers):
+            hook = get_parallel_component_hook(direction, results_cache, i, layer_idx)
+            component_hooks.append((model_base.model_block_modules[layer_idx], hook))
+
+        # Create CORRECT attention patching hooks
+        original_forwards = create_correct_attention_patching_hooks(
+            model_base, head_config, harmless_attention_cache, batch_sample_indices
+        )
+
+        try:
+            # Forward pass with component collection hooks and patched attention methods
+            with add_hooks(module_forward_pre_hooks=component_hooks, module_forward_hooks=[]):
+                with torch.no_grad():
+                    _ = model_base.model(input_ids=input_ids, attention_mask=attention_mask)
+        finally:
+            # Restore original forward methods after each batch
+            restore_attention_forward_methods(model_base, original_forwards)
+
+        # Clear GPU memory
+        torch.cuda.empty_cache()
+
+    print(f"Completed CORRECT attention patching for {len(harmful_instructions)} samples")
+    return results_cache
 
 
 if __name__ == "__main__":

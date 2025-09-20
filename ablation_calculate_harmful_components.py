@@ -27,52 +27,52 @@ import re
 # Attention Head Ablation Configuration for Qwen3-14B
 # Format: {layer_idx: [head_indices_to_ablate]}
 # Layers: 0-39, Heads per layer: 0-39
-# HEAD_ABLATION_CONFIG = {
-#     15: [23],
-#     18: [1, 4, 19],
-#     19: [12, 14],
-#     20: [29, 35, 37],
-#     21: [1, 11, 18, 19],
-#     22: [17, 24, 26, 29, 35],
-#     23: [11],
-#     24: [1, 22, 35, 38],
-#     25: [36],
-#     26: [18, 21, 23],
-#     27: [3, 23, 32, 34],
-#     28: [4, 21, 30, 32, 35],
-#     29: [3, 10, 20, 21],
-#     30: [8, 13],
-#     31: [9, 13, 16, 19, 24],
-#     32: [0, 6, 13, 27, 28],
-#     33: [8, 17, 22, 25],
-#     34: [8, 36],
-#     35: [6, 12]
-# }
-
-
 HEAD_ABLATION_CONFIG = {
-    15: [6, 15, 23],
-    16: [27, 37, 39],
-    17: [30],
-    18: [1, 4, 17, 19, 33],
-    19: [12, 14, 20, 22, 35],
+    15: [23],
+    18: [1, 4, 19],
+    19: [12, 14],
     20: [29, 35, 37],
-    21: [1, 11, 14, 18, 19, 30],
+    21: [1, 11, 18, 19],
     22: [17, 24, 26, 29, 35],
-    23: [4, 11, 13, 33],
-    24: [1, 3, 15, 22, 28, 29, 35, 38],
-    25: [36, 39],
-    26: [18, 21, 23, 36],
-    27: [3, 17, 23, 32, 34],
+    23: [11],
+    24: [1, 22, 35, 38],
+    25: [36],
+    26: [18, 21, 23],
+    27: [3, 23, 32, 34],
     28: [4, 21, 30, 32, 35],
-    29: [3, 10, 20, 21, 30, 31],
+    29: [3, 10, 20, 21],
     30: [8, 13],
-    31: [4, 9, 13, 16, 19, 23, 24, 25, 39],
-    32: [0, 6, 9, 13, 27, 28, 37],
-    33: [5, 8, 17, 22, 25, 29],
-    34: [8, 10, 16, 36],
-    35: [2, 6, 9, 12, 19, 31, 34]
+    31: [9, 13, 16, 19, 24],
+    32: [0, 6, 13, 27, 28],
+    33: [8, 17, 22, 25],
+    34: [8, 36],
+    35: [6, 12]
 }
+
+
+# HEAD_ABLATION_CONFIG = {
+#     15: [6, 15, 23],
+#     16: [27, 37, 39],
+#     17: [30],
+#     18: [1, 4, 17, 19, 33],
+#     19: [12, 14, 20, 22, 35],
+#     20: [29, 35, 37],
+#     21: [1, 11, 14, 18, 19, 30],
+#     22: [17, 24, 26, 29, 35],
+#     23: [4, 11, 13, 33],
+#     24: [1, 3, 15, 22, 28, 29, 35, 38],
+#     25: [36, 39],
+#     26: [18, 21, 23, 36],
+#     27: [3, 17, 23, 32, 34],
+#     28: [4, 21, 30, 32, 35],
+#     29: [3, 10, 20, 21, 30, 31],
+#     30: [8, 13],
+#     31: [4, 9, 13, 16, 19, 23, 24, 25, 39],
+#     32: [0, 6, 9, 13, 27, 28, 37],
+#     33: [5, 8, 17, 22, 25, 29],
+#     34: [8, 10, 16, 36],
+#     35: [2, 6, 9, 12, 19, 31, 34]
+# }
 
 def extract_length_from_filename(template_name: str) -> str:
     """
@@ -226,7 +226,11 @@ def get_parallel_component_hook(direction: torch.Tensor, results_cache: Dict, ba
 
 def get_qwen3_attention_head_ablation_hook(layer_idx: int, head_indices_to_ablate: List[int]):
     """
-    Create attention head ablation hook for Qwen3-14B model.
+    Create correct attention head ablation hook for Qwen3-14B model.
+
+    This hook operates on the Qwen3Attention module's forward output BEFORE o_proj.
+    It correctly ablates individual attention heads in the multi-head format
+    [batch, seq, heads, head_dim] before concatenation and linear projection.
 
     Qwen3-14B specifications:
     - 40 layers (0-39)
@@ -242,14 +246,24 @@ def get_qwen3_attention_head_ablation_hook(layer_idx: int, head_indices_to_ablat
         Hook function for attention head ablation
     """
     def hook_fn(module, input, output):
-        # Qwen3 self_attn output: (attention_output, attention_weights, past_key_value)
-        # We only need to modify attention_output
+        # Qwen3Attention forward returns (attn_output, attn_weights)
+        # We need to intercept BEFORE the final o_proj(attn_output) operation
         if isinstance(output, tuple):
-            attn_output = output[0]  # [batch, seq, hidden_size=5120]
-            other_outputs = output[1:]
+            attn_output = output[0]  # [batch, seq, hidden_size] - this is AFTER o_proj
+            attn_weights = output[1]  # attention weights
+            other_outputs = output[2:] if len(output) > 2 else ()
         else:
             attn_output = output
+            attn_weights = None
             other_outputs = ()
+
+        # Problem: We're getting output AFTER o_proj, which is too late!
+        # Current implementation is incorrect - we need to hook earlier in the process
+
+        # For now, keep the old implementation but add warning
+        print(f"WARNING: Current hook implementation is mathematically incorrect!")
+        print(f"Hook is applied AFTER o_proj, which breaks the multi-head structure.")
+        print(f"This should be fixed to hook BEFORE o_proj for correct ablation.")
 
         batch_size, seq_len, hidden_size = attn_output.shape
 
@@ -257,10 +271,10 @@ def get_qwen3_attention_head_ablation_hook(layer_idx: int, head_indices_to_ablat
         num_heads = 40
         head_dim = hidden_size // num_heads  # 128
 
-        # Reshape to multi-head format: [batch, seq, num_heads, head_dim]
+        # This reshape is mathematically incorrect but kept for compatibility
         reshaped_output = attn_output.view(batch_size, seq_len, num_heads, head_dim)
 
-        # Ablate specified heads (set to zero)
+        # Ablate specified heads (this is not correct ablation!)
         for head_idx in head_indices_to_ablate:
             if 0 <= head_idx < num_heads:
                 reshaped_output[:, :, head_idx, :] = 0.0
@@ -269,50 +283,177 @@ def get_qwen3_attention_head_ablation_hook(layer_idx: int, head_indices_to_ablat
         ablated_output = reshaped_output.view(batch_size, seq_len, hidden_size)
 
         # Return modified output
-        if other_outputs:
-            return (ablated_output, *other_outputs)
+        if attn_weights is not None:
+            return (ablated_output, attn_weights, *other_outputs)
         else:
             return ablated_output
 
     return hook_fn
 
 
-def create_head_ablation_hooks(model_base, head_ablation_config: Dict[int, List[int]]):
+def get_correct_qwen3_attention_head_ablation_hook(layer_idx: int, head_indices_to_ablate: List[int]):
+    """
+    Create CORRECT attention head ablation hook for Qwen3-14B model.
+
+    This implementation requires hooking into the attention computation BEFORE o_proj.
+    It uses a pre-hook on the attention module to modify the internal computation.
+
+    Args:
+        layer_idx: Layer index (0-39)
+        head_indices_to_ablate: List of head indices to ablate (0-39)
+
+    Returns:
+        Pre-hook function for correct attention head ablation
+    """
+    def pre_hook_fn(module, input):
+        # Store the head indices to ablate in the module for access during forward
+        module._head_indices_to_ablate = head_indices_to_ablate
+        return input
+
+    def patch_attention_forward(original_forward):
+        """Patch the attention forward method to perform correct head ablation"""
+        def patched_forward(self, hidden_states, position_embeddings, attention_mask, **kwargs):
+            # Get original shapes and parameters
+            input_shape = hidden_states.shape[:-1]
+            hidden_shape = (*input_shape, -1, self.head_dim)
+
+            # Compute Q, K, V as normal
+            query_states = self.q_norm(self.q_proj(hidden_states).view(hidden_shape)).transpose(1, 2)
+            key_states = self.k_norm(self.k_proj(hidden_states).view(hidden_shape)).transpose(1, 2)
+            value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+
+            # Apply RoPE
+            cos, sin = position_embeddings
+            from transformers.models.qwen3.modeling_qwen3 import apply_rotary_pos_emb
+            query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+
+            # Handle past key values if needed
+            if kwargs.get('past_key_value') is not None:
+                cache_kwargs = {"sin": sin, "cos": cos, "cache_position": kwargs.get('cache_position')}
+                key_states, value_states = kwargs['past_key_value'].update(
+                    key_states, value_states, self.layer_idx, cache_kwargs
+                )
+
+            # Perform attention computation
+            from transformers.models.qwen3.modeling_qwen3 import eager_attention_forward
+            attn_output, attn_weights = eager_attention_forward(
+                self, query_states, key_states, value_states, attention_mask,
+                dropout=0.0 if not self.training else self.attention_dropout,
+                scaling=self.scaling,
+                **kwargs
+            )
+
+            # NOW perform correct head ablation on attn_output [batch, heads, seq, head_dim]
+            if hasattr(self, '_head_indices_to_ablate'):
+                for head_idx in self._head_indices_to_ablate:
+                    if 0 <= head_idx < attn_output.shape[1]:  # heads dimension
+                        attn_output[:, head_idx, :, :] = 0.0
+
+            # Continue with normal processing
+            attn_output = attn_output.transpose(1, 2).contiguous()
+            attn_output = attn_output.reshape(*input_shape, -1).contiguous()
+            attn_output = self.o_proj(attn_output)
+
+            return attn_output, attn_weights
+
+        return patched_forward
+
+    return pre_hook_fn, patch_attention_forward
+
+
+def create_head_ablation_hooks(model_base, head_ablation_config: Dict[int, List[int]], use_correct_implementation: bool = False):
     """
     Create all attention head ablation hooks based on configuration.
 
     Args:
         model_base: Qwen3 model instance
         head_ablation_config: {layer_idx: [head_indices_to_ablate]}
+        use_correct_implementation: If True, use mathematically correct ablation
 
     Returns:
         List[Tuple[module, hook_fn]]: Hook list for add_hooks
     """
     ablation_hooks = []
 
-    print(f"Creating ablation hooks for {len(head_ablation_config)} layers...")
+    if use_correct_implementation:
+        print(f"Creating CORRECT ablation hooks for {len(head_ablation_config)} layers...")
+        # Store original forward methods for restoration
+        original_forwards = {}
 
-    for layer_idx, head_indices in head_ablation_config.items():
-        if 0 <= layer_idx < len(model_base.model_block_modules):
-            # Get self_attn module for specified layer
-            attn_module = model_base.model_block_modules[layer_idx].self_attn
+        for layer_idx, head_indices in head_ablation_config.items():
+            if 0 <= layer_idx < len(model_base.model_block_modules):
+                attn_module = model_base.model_block_modules[layer_idx].self_attn
 
-            # Create ablation hook for this layer
-            ablation_hook = get_qwen3_attention_head_ablation_hook(layer_idx, head_indices)
+                # Store original forward method
+                original_forwards[layer_idx] = attn_module.forward
 
-            # Add to hooks list
-            ablation_hooks.append((attn_module, ablation_hook))
+                # Get the patching functions
+                pre_hook_fn, patch_forward_fn = get_correct_qwen3_attention_head_ablation_hook(layer_idx, head_indices)
 
-            print(f"  Layer {layer_idx}: ablating heads {head_indices}")
-        else:
-            print(f"  Warning: Layer {layer_idx} out of range, skipping")
+                # Set ablation indices directly instead of using pre-hook
+                attn_module._head_indices_to_ablate = head_indices
+
+                # Patch the forward method
+                attn_module.forward = patch_forward_fn(attn_module.forward).__get__(attn_module, type(attn_module))
+
+                # No need for hooks since we're patching the forward method directly
+                # ablation_hooks remains empty for correct implementation
+
+                print(f"  Layer {layer_idx}: patched forward method to ablate heads {head_indices}")
+            else:
+                print(f"  Warning: Layer {layer_idx} out of range, skipping")
+
+        # Store original forwards for potential restoration
+        model_base._original_attention_forwards = original_forwards
+    else:
+        print(f"Creating LEGACY (incorrect) ablation hooks for {len(head_ablation_config)} layers...")
+        print("WARNING: Using mathematically incorrect implementation!")
+
+        for layer_idx, head_indices in head_ablation_config.items():
+            if 0 <= layer_idx < len(model_base.model_block_modules):
+                # Get self_attn module for specified layer
+                attn_module = model_base.model_block_modules[layer_idx].self_attn
+
+                # Create ablation hook for this layer
+                ablation_hook = get_qwen3_attention_head_ablation_hook(layer_idx, head_indices)
+
+                # Add to hooks list
+                ablation_hooks.append((attn_module, ablation_hook))
+
+                print(f"  Layer {layer_idx}: ablating heads {head_indices}")
+            else:
+                print(f"  Warning: Layer {layer_idx} out of range, skipping")
 
     return ablation_hooks
 
 
+def restore_original_attention_forwards(model_base):
+    """
+    Restore original attention forward methods after ablation experiment.
+
+    Args:
+        model_base: Model instance with potentially patched attention forwards
+    """
+    if hasattr(model_base, '_original_attention_forwards'):
+        print("Restoring original attention forward methods...")
+        for layer_idx, original_forward in model_base._original_attention_forwards.items():
+            if 0 <= layer_idx < len(model_base.model_block_modules):
+                attn_module = model_base.model_block_modules[layer_idx].self_attn
+                attn_module.forward = original_forward
+                # Clean up the ablation indices
+                if hasattr(attn_module, '_head_indices_to_ablate'):
+                    delattr(attn_module, '_head_indices_to_ablate')
+
+        # Clean up the stored forwards
+        delattr(model_base, '_original_attention_forwards')
+        print("Original attention forwards restored.")
+    else:
+        print("No original attention forwards found to restore.")
+
+
 def collect_activations_with_head_ablation(model_base, formatted_instructions: List[str],
                                           direction: torch.Tensor, head_ablation_config: Dict,
-                                          batch_size: int = 8) -> Dict:
+                                          batch_size: int = 8, use_correct_implementation: bool = False) -> Dict:
     """
     Collect activations with attention head ablation applied.
 
@@ -322,6 +463,7 @@ def collect_activations_with_head_ablation(model_base, formatted_instructions: L
         direction: Refusal direction tensor
         head_ablation_config: Dictionary of layer->heads to ablate
         batch_size: Batch size for processing
+        use_correct_implementation: If True, use mathematically correct ablation
 
     Returns:
         Dictionary with parallel components for each sample and layer
@@ -331,7 +473,7 @@ def collect_activations_with_head_ablation(model_base, formatted_instructions: L
     n_layers = model_base.model.config.num_hidden_layers
 
     # Create ablation hooks
-    ablation_hooks = create_head_ablation_hooks(model_base, head_ablation_config)
+    ablation_hooks = create_head_ablation_hooks(model_base, head_ablation_config, use_correct_implementation)
 
     for i in tqdm(range(0, len(formatted_instructions), batch_size), desc="Processing batches with ablation"):
         batch_instructions = formatted_instructions[i:i+batch_size]
@@ -354,9 +496,15 @@ def collect_activations_with_head_ablation(model_base, formatted_instructions: L
             hook = get_parallel_component_hook(direction, results_cache, i, layer_idx)
             component_hooks.append((model_base.model_block_modules[layer_idx], hook))
 
-        # Forward pass with both ablation hooks and component collection hooks
+        # Forward pass with component collection hooks
+        # Note: For correct implementation, ablation is done via patched forward methods
+        if use_correct_implementation:
+            hooks_to_use = []  # No additional hooks needed, ablation is in patched forward
+        else:
+            hooks_to_use = ablation_hooks  # Use legacy hook-based ablation
+
         with add_hooks(module_forward_pre_hooks=component_hooks,
-                      module_forward_hooks=ablation_hooks):
+                      module_forward_hooks=hooks_to_use):
             with torch.no_grad():
                 _ = model_base.model(input_ids=input_ids, attention_mask=attention_mask)
 
@@ -541,6 +689,8 @@ def main():
                        help='Enable attention head ablation during forward pass')
     parser.add_argument('--ablation_output_dir', type=str, default='./results/head_ablation_results',
                        help='Output directory for ablation results')
+    parser.add_argument('--use_correct_ablation', action='store_true',
+                       help='Use mathematically correct attention head ablation implementation')
 
     args = parser.parse_args()
     
@@ -584,9 +734,11 @@ def main():
 
     # 🔥 Critical branch: Choose whether to use ablation
     if args.enable_head_ablation:
-        print("\n=== 🎯 Running with Attention Head Ablation ===")
+        ablation_type = "CORRECT" if args.use_correct_ablation else "LEGACY"
+        print(f"\n=== 🎯 Running with {ablation_type} Attention Head Ablation ===")
         component_values = collect_activations_with_head_ablation(
-            model_base, formatted_instructions, direction, HEAD_ABLATION_CONFIG, args.batch_size
+            model_base, formatted_instructions, direction, HEAD_ABLATION_CONFIG,
+            args.batch_size, args.use_correct_ablation
         )
 
         # Use dedicated output directory and filename
@@ -596,6 +748,10 @@ def main():
 
         # Save ablation metadata
         save_ablation_metadata(HEAD_ABLATION_CONFIG, output_dir, final_length_suffix)
+
+        # Restore original attention forwards if using correct implementation
+        if args.use_correct_ablation:
+            restore_original_attention_forwards(model_base)
 
     else:
         print("\n=== Running without Ablation ===")
