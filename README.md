@@ -19,6 +19,19 @@ source setup.sh
 The setup script will prompt you for a HuggingFace token (required to access gated models) and a Together AI token (required to access the Together AI API, which is used for evaluating jailbreak safety scores).
 It will then set up a virtual environment and install the required packages.
 
+## Qwen3-14B HarmBench head-ablation compliance experiment
+
+To compare a local Qwen3-14B model with and without the selected 60 attention heads ablated, install the project dependencies, set a DeepSeek API key, then run:
+
+```bash
+export DEEPSEEK_API_KEY="..."
+python3 run_harmbench_head_ablation_compliance.py
+```
+
+The command defaults to the locally cached Qwen3-14B snapshot at `/root/autodl-tmp/hub/models--Qwen--Qwen3-14B/snapshots/40c069824f4251a91eefaf281ebe4c544efd3e18`; override it with `--model_path /path/to/Qwen3-14B` if needed. It evaluates the first 100 examples in `walledai/HarmBench` (`standard`, `train`) using Qwen3's thinking chat template. Qwen3 generation uses batches of 4 and the DeepSeek judge sends up to 10 simultaneous requests; override these with `--batch_size` and `--judge_concurrency`. It writes timestamped `baseline.jsonl`, `ablated.jsonl`, `summary.json`, `config.json`, and `run.log` files under `results/harmbench_head_ablation_compliance/`. The DeepSeek judge is `deepseek-v4-flash` in non-thinking mode.
+
+`walledai/HarmBench` is gated on Hugging Face: accept its access conditions and authenticate with Hugging Face before the first run. The script only accepts an already-downloaded local model directory and does not download model weights.
+
 ## Reproducing main results
 
 To reproduce the main results from the paper, run the following command:

@@ -90,8 +90,8 @@ def create_layer_comparison_plot(results: Dict, output_path: str):
                 capsize=3, capthick=1, linewidth=2, marker='s', markersize=4)
     
     plt.xlabel('Layer Index', fontsize=14)
-    plt.ylabel('Parallel Component Value', fontsize=14)
-    plt.title('Layer-wise Parallel Component Analysis\n(Mean ± Std, with Sign)', fontsize=16)
+    plt.ylabel('Refusal Component Value', fontsize=14)
+
     
     # Add zero line for reference
     plt.axhline(y=0, color='black', linestyle='--', alpha=0.5, linewidth=1)
@@ -156,27 +156,18 @@ def create_distribution_comparison_plot(results: Dict, output_path: str):
         axes[i].set_title(f'Layer {layer}', fontsize=12)
         axes[i].set_xticks([0, 1])
         axes[i].set_xticklabels(labels)
-        axes[i].set_ylabel('Parallel Component Value', fontsize=10)
+        axes[i].set_ylabel('Refusal Component Value', fontsize=10)
         
         # Add zero line for reference
         axes[i].axhline(y=0, color='black', linestyle='--', alpha=0.3, linewidth=1)
         axes[i].grid(True, alpha=0.3)
         
-        # Add statistical test
-        harmful_layer = harmful_components[:, layer]
-        harmless_layer = harmless_components[:, layer]
-        statistic, p_value = stats.mannwhitneyu(harmful_layer, harmless_layer, 
-                                               alternative='two-sided')
-        significance = "***" if p_value < 0.001 else "**" if p_value < 0.01 else "*" if p_value < 0.05 else "ns"
-        axes[i].text(0.5, max(np.max(harmful_layer), np.max(harmless_layer)) * 0.9, 
-                    f'p{significance}', ha='center', fontsize=10,
-                    bbox=dict(boxstyle="round,pad=0.2", facecolor="white", alpha=0.8))
+        # Statistical test code removed - no p-value annotations in plot
     
     # Hide empty subplots
     for i in range(len(key_layers), len(axes)):
         axes[i].set_visible(False)
     
-    plt.suptitle('Distribution Comparison Across Selected Layers', fontsize=16, y=0.98)
     plt.tight_layout()
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()

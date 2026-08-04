@@ -150,9 +150,12 @@ def plot_combined_layer_comparison_mean(df: pd.DataFrame, save_dir: str = "visua
 def plot_overlaid_layer_comparison(df: pd.DataFrame, save_dir: str = "visualization_results", save_filename: str = "overlaid_layer_comparison.png"):
     """Plot overlaid layer-wise comparison with harmful, harmless, and stealth harmful on the same plot."""
     plt.figure(figsize=(20, 12))
-    
+
     template_lengths = ["1k", "3k", "11k", "21k", "31k", "47k"]
     colors = plt.cm.Set1(np.linspace(0, 1, len(template_lengths)))
+    # Replace yellow with warmer yellow
+    colors = list(colors)
+    colors[3] = '#FFBF00'  # Replace the 4th color (yellow) with amber gold
     
     # Plot harmful components (solid lines)
     for i, length in enumerate(template_lengths):
@@ -174,32 +177,32 @@ def plot_overlaid_layer_comparison(df: pd.DataFrame, save_dir: str = "visualizat
     for i, length in enumerate(template_lengths):
         stealth_data = df[(df['template_length'] == length) & (df['data_type'] == 'stealth_harmful')]
         if len(stealth_data) > 0:
-            plt.plot(stealth_data['layer'], stealth_data['mean_component'], 
-                    label=f'Stealth {length}', color=colors[i], 
+            plt.plot(stealth_data['layer'], stealth_data['mean_component'],
+                    label=f'Stealthy Harmful {length}', color=colors[i],
                     marker='^', markersize=4, linewidth=2.5, alpha=0.7, linestyle=':')
     
-    plt.xlabel('Layer Index', fontsize=12)
-    plt.ylabel('Mean Parallel Component', fontsize=12)
-    plt.title('Harmful vs Harmless vs Stealth Harmful Template Component Comparison Across Layers', fontsize=14, fontweight='bold')
-    
+    plt.xlabel('Layer Index', fontsize=42)
+    plt.ylabel('Refusal Component', fontsize=42)
+    plt.tick_params(axis='both', which='major', labelsize=24)
+
     # Create unified legend on the left side
     handles, labels = plt.gca().get_legend_handles_labels()
     
     # Split into harmful, harmless, and stealth, then combine for vertical arrangement
     harmful_handles = [h for h, l in zip(handles, labels) if 'Harmful' in l and 'Stealth' not in l]
     harmless_handles = [h for h, l in zip(handles, labels) if 'Harmless' in l]
-    stealth_handles = [h for h, l in zip(handles, labels) if 'Stealth' in l]
+    stealth_handles = [h for h, l in zip(handles, labels) if 'Stealthy Harmful' in l]
     harmful_labels = [l for l in labels if 'Harmful' in l and 'Stealth' not in l]
     harmless_labels = [l for l in labels if 'Harmless' in l]
-    stealth_labels = [l for l in labels if 'Stealth' in l]
+    stealth_labels = [l for l in labels if 'Stealthy Harmful' in l]
     
     # Combine all handles and labels in vertical order
     all_handles = harmful_handles + harmless_handles + stealth_handles
     all_labels = harmful_labels + harmless_labels + stealth_labels
     
     # Create single legend positioned on the left side with better formatting
-    plt.legend(all_handles, all_labels, loc='center left', bbox_to_anchor=(0.02, 0.5), ncol=1, 
-              fontsize=10, markerscale=1.5, handlelength=4.0, handletextpad=1.0, columnspacing=2.0)
+    plt.legend(all_handles, all_labels, loc='center left', bbox_to_anchor=(0.02, 0.5), ncol=1,
+              fontsize=22, markerscale=1.5, handlelength=4.0, handletextpad=1.0, columnspacing=2.0)
     
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
@@ -377,6 +380,186 @@ def plot_harmful_vs_stealth_heatmap(df: pd.DataFrame, save_dir: str = "visualiza
     print(f"Harmful vs stealth difference heatmap saved to {save_path}")
 
 
+def plot_gradient_harmless(df: pd.DataFrame, save_dir: str = "visualization_results", save_filename: str = "gradient_harmless_components.png"):
+    """Plot harmless components with x-axis as template lengths, y-axis as refusal component, and gradient colors for layer index."""
+    plt.figure(figsize=(12, 8))
+
+    template_lengths = ["1k", "3k", "11k", "21k", "31k", "47k"]
+    template_length_values = [1, 3, 11, 21, 31, 47]  # Numeric values for x-axis
+
+    # Get harmless data
+    harmless_data = df[df['data_type'] == 'harmless']
+
+    if len(harmless_data) == 0:
+        print("No harmless data found for gradient visualization")
+        return
+
+    # Get unique layers and create colormap
+    unique_layers = sorted(harmless_data['layer'].unique())
+    n_layers = len(unique_layers)
+    colors = plt.cm.viridis(np.linspace(0, 1, n_layers))
+
+    # Plot each layer with different color
+    for i, layer in enumerate(unique_layers):
+        layer_data = harmless_data[harmless_data['layer'] == layer]
+
+        # Prepare data for plotting
+        x_vals = []
+        y_vals = []
+
+        for j, length in enumerate(template_lengths):
+            length_data = layer_data[layer_data['template_length'] == length]
+            if len(length_data) > 0:
+                x_vals.append(template_length_values[j])
+                y_vals.append(length_data['mean_component'].iloc[0])
+
+        if x_vals and y_vals:
+            plt.plot(x_vals, y_vals, color=colors[i], marker='o', markersize=6,
+                    linewidth=2, alpha=0.8, label=f'Layer {layer}')
+
+    plt.xlabel('CoT Length (k tokens)', fontsize=14)
+    plt.ylabel('Refusal Component', fontsize=14)
+    plt.grid(True, alpha=0.3)
+
+    # Create colorbar to show layer index mapping
+    sm = plt.cm.ScalarMappable(cmap=plt.cm.viridis, norm=plt.Normalize(vmin=min(unique_layers), vmax=max(unique_layers)))
+    sm.set_array([])
+    cbar = plt.colorbar(sm, ax=plt.gca())
+    cbar.set_label('Layer Index', fontsize=12)
+
+    plt.tight_layout()
+
+    # Create directory if it doesn't exist
+    save_dir_path = Path(save_dir)
+    save_dir_path.mkdir(exist_ok=True)
+
+    save_path = save_dir_path / save_filename
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.show()
+
+    print(f"Gradient harmless components plot saved to {save_path}")
+
+
+def plot_gradient_harmful(df: pd.DataFrame, save_dir: str = "visualization_results", save_filename: str = "gradient_harmful_components.png"):
+    """Plot harmful components with x-axis as template lengths, y-axis as refusal component, and gradient colors for layer index."""
+    plt.figure(figsize=(12, 8))
+
+    template_lengths = ["1k", "3k", "11k", "21k", "31k", "47k"]
+    template_length_values = [1, 3, 11, 21, 31, 47]  # Numeric values for x-axis
+
+    # Get harmful data
+    harmful_data = df[df['data_type'] == 'harmful']
+
+    if len(harmful_data) == 0:
+        print("No harmful data found for gradient visualization")
+        return
+
+    # Get unique layers and create colormap
+    unique_layers = sorted(harmful_data['layer'].unique())
+    n_layers = len(unique_layers)
+    colors = plt.cm.plasma(np.linspace(0, 1, n_layers))
+
+    # Plot each layer with different color
+    for i, layer in enumerate(unique_layers):
+        layer_data = harmful_data[harmful_data['layer'] == layer]
+
+        # Prepare data for plotting
+        x_vals = []
+        y_vals = []
+
+        for j, length in enumerate(template_lengths):
+            length_data = layer_data[layer_data['template_length'] == length]
+            if len(length_data) > 0:
+                x_vals.append(template_length_values[j])
+                y_vals.append(length_data['mean_component'].iloc[0])
+
+        if x_vals and y_vals:
+            plt.plot(x_vals, y_vals, color=colors[i], marker='s', markersize=6,
+                    linewidth=2, alpha=0.8, label=f'Layer {layer}')
+
+    plt.xlabel('CoT Length (k tokens)', fontsize=14)
+    plt.ylabel('Refusal Component', fontsize=14)
+    plt.grid(True, alpha=0.3)
+
+    # Create colorbar to show layer index mapping
+    sm = plt.cm.ScalarMappable(cmap=plt.cm.plasma, norm=plt.Normalize(vmin=min(unique_layers), vmax=max(unique_layers)))
+    sm.set_array([])
+    cbar = plt.colorbar(sm, ax=plt.gca())
+    cbar.set_label('Layer Index', fontsize=12)
+
+    plt.tight_layout()
+
+    # Create directory if it doesn't exist
+    save_dir_path = Path(save_dir)
+    save_dir_path.mkdir(exist_ok=True)
+
+    save_path = save_dir_path / save_filename
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.show()
+
+    print(f"Gradient harmful components plot saved to {save_path}")
+
+
+def plot_gradient_stealth_harmful(df: pd.DataFrame, save_dir: str = "visualization_results", save_filename: str = "gradient_stealth_harmful_components.png"):
+    """Plot stealth harmful components with x-axis as template lengths, y-axis as refusal component, and gradient colors for layer index."""
+    plt.figure(figsize=(12, 8))
+
+    template_lengths = ["1k", "3k", "11k", "21k", "31k", "47k"]
+    template_length_values = [1, 3, 11, 21, 31, 47]  # Numeric values for x-axis
+
+    # Get stealth harmful data
+    stealth_data = df[df['data_type'] == 'stealth_harmful']
+
+    if len(stealth_data) == 0:
+        print("No stealth harmful data found for gradient visualization")
+        return
+
+    # Get unique layers and create colormap
+    unique_layers = sorted(stealth_data['layer'].unique())
+    n_layers = len(unique_layers)
+    colors = plt.cm.inferno(np.linspace(0, 1, n_layers))
+
+    # Plot each layer with different color
+    for i, layer in enumerate(unique_layers):
+        layer_data = stealth_data[stealth_data['layer'] == layer]
+
+        # Prepare data for plotting
+        x_vals = []
+        y_vals = []
+
+        for j, length in enumerate(template_lengths):
+            length_data = layer_data[layer_data['template_length'] == length]
+            if len(length_data) > 0:
+                x_vals.append(template_length_values[j])
+                y_vals.append(length_data['mean_component'].iloc[0])
+
+        if x_vals and y_vals:
+            plt.plot(x_vals, y_vals, color=colors[i], marker='^', markersize=6,
+                    linewidth=2, alpha=0.8, label=f'Layer {layer}')
+
+    plt.xlabel('CoT Length (k tokens)', fontsize=14)
+    plt.ylabel('Refusal Component', fontsize=14)
+    plt.grid(True, alpha=0.3)
+
+    # Create colorbar to show layer index mapping
+    sm = plt.cm.ScalarMappable(cmap=plt.cm.inferno, norm=plt.Normalize(vmin=min(unique_layers), vmax=max(unique_layers)))
+    sm.set_array([])
+    cbar = plt.colorbar(sm, ax=plt.gca())
+    cbar.set_label('Layer Index', fontsize=12)
+
+    plt.tight_layout()
+
+    # Create directory if it doesn't exist
+    save_dir_path = Path(save_dir)
+    save_dir_path.mkdir(exist_ok=True)
+
+    save_path = save_dir_path / save_filename
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.show()
+
+    print(f"Gradient stealth harmful components plot saved to {save_path}")
+
+
 def main():
     """Main enhanced visualization pipeline."""
     print("=== Enhanced Template Component Visualization Pipeline ===")
@@ -403,14 +586,22 @@ def main():
     plot_difference_heatmap(df, save_dir, "harmful_harmless_difference_heatmap.png")
     plot_stealth_difference_heatmap(df, save_dir, "stealth_harmful_harmless_difference_heatmap.png")
     plot_harmful_vs_stealth_heatmap(df, save_dir, "harmful_vs_stealth_difference_heatmap.png")
+
+    # Generate gradient visualizations
+    plot_gradient_harmless(df, save_dir, "gradient_harmless_components.png")
+    plot_gradient_harmful(df, save_dir, "gradient_harmful_components.png")
+    plot_gradient_stealth_harmful(df, save_dir, "gradient_stealth_harmful_components.png")
     
     print("\n=== Enhanced Visualization Complete ===")
     print(f"All files saved to '{save_dir}/' directory:")
     print("- combined_layer_comparison_mean.png: Side-by-side harmful vs harmless vs stealth harmful layer comparison")
-    print("- overlaid_layer_comparison.png: Overlaid harmful, harmless, and stealth harmful components on same plot")  
+    print("- overlaid_layer_comparison.png: Overlaid harmful, harmless, and stealth harmful components on same plot")
     print("- harmful_harmless_difference_heatmap.png: Heatmap showing differences between harmful and harmless")
     print("- stealth_harmful_harmless_difference_heatmap.png: Heatmap showing differences between stealth harmful and harmless")
     print("- harmful_vs_stealth_difference_heatmap.png: Heatmap showing differences between harmful and stealth harmful")
+    print("- gradient_harmless_components.png: Harmless components across template lengths with gradient colors by layer")
+    print("- gradient_harmful_components.png: Harmful components across template lengths with gradient colors by layer")
+    print("- gradient_stealth_harmful_components.png: Stealth harmful components across template lengths with gradient colors by layer")
 
 if __name__ == "__main__":
     main()

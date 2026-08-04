@@ -29,28 +29,15 @@ import re
 # Layers: 0-39, Heads per layer: 0-39
 HEAD_ABLATION_CONFIG = {
     15: [23],
-    18: [1, 4, 19],
-    19: [12, 14],
-    20: [29, 35, 37],
-    21: [1, 11, 18, 19],
-    22: [17, 24, 26, 29, 35],
+    18: [4],
+    20: [37],
     23: [11],
-    24: [1, 22, 35, 38],
-    25: [36],
-    26: [18, 21, 23],
-    27: [3, 23, 32, 34],
-    28: [4, 21, 30, 32, 35],
-    29: [3, 10, 20, 21],
-    30: [8, 13],
-    31: [9, 13, 16, 19, 24],
-    32: [0, 6, 13, 27, 28],
-    33: [8, 17, 22, 25],
-    34: [8, 36],
-    35: [6, 12]
+    27: [34],
+    31: [13],
 }
 
 
-# HEAD_ABLATION_CONFIG = {
+# HEAD_ABLATION_CONFIG2 = {
 #     15: [6, 15, 23],
 #     16: [27, 37, 39],
 #     17: [30],
@@ -73,6 +60,79 @@ HEAD_ABLATION_CONFIG = {
 #     34: [8, 10, 16, 36],
 #     35: [2, 6, 9, 12, 19, 31, 34]
 # }
+
+
+def generate_random_head_ablation_config(exclude_config: Dict[int, List[int]],
+                                        target_layers: range = range(15, 36),
+                                        total_heads_to_ablate: int = 6,
+                                        total_heads_per_layer: int = 40) -> Dict[int, List[int]]:
+    """
+    Generate random head ablation configuration excluding already configured heads.
+
+    Args:
+        exclude_config: Existing head ablation config to exclude
+        target_layers: Range of layers to consider (default: 15-35)
+        total_heads_to_ablate: Total number of heads to randomly select (default: 60)
+        total_heads_per_layer: Total heads per layer (default: 40 for Qwen3-14B)
+
+    Returns:
+        Dictionary mapping layer indices to lists of head indices to ablate
+    """
+    print(f"Generating random head ablation config...")
+    print(f"Target layers: {list(target_layers)}")
+    print(f"Total heads to ablate: {total_heads_to_ablate}")
+
+    # Set random seed for reproducibility
+    random.seed(37)
+
+    # Collect all available (layer, head) pairs in target layers
+    available_heads = []
+    excluded_heads = set()
+
+    for layer_idx in target_layers:
+        # Add existing ablated heads to exclusion set
+        if layer_idx in exclude_config:
+            for head_idx in exclude_config[layer_idx]:
+                excluded_heads.add((layer_idx, head_idx))
+
+        # Add all heads in this layer to available pool
+        for head_idx in range(total_heads_per_layer):
+            if (layer_idx, head_idx) not in excluded_heads:
+                available_heads.append((layer_idx, head_idx))
+
+    print(f"Available heads for random selection: {len(available_heads)}")
+    print(f"Excluded heads from existing config: {len(excluded_heads)}")
+
+    # Check if we have enough heads to select
+    if len(available_heads) < total_heads_to_ablate:
+        raise ValueError(f"Not enough available heads! "
+                        f"Need {total_heads_to_ablate}, but only {len(available_heads)} available")
+
+    # Randomly select heads
+    selected_heads = random.sample(available_heads, total_heads_to_ablate)
+
+    # Organize selected heads by layer
+    random_config = {}
+    for layer_idx, head_idx in selected_heads:
+        if layer_idx not in random_config:
+            random_config[layer_idx] = []
+        random_config[layer_idx].append(head_idx)
+
+    # Sort heads within each layer for consistency
+    for layer_idx in random_config:
+        random_config[layer_idx].sort()
+
+    # Print summary
+    print(f"Random ablation config generated:")
+    total_selected = sum(len(heads) for heads in random_config.values())
+    print(f"  - Layers affected: {len(random_config)}")
+    print(f"  - Total heads selected: {total_selected}")
+    for layer_idx in sorted(random_config.keys()):
+        heads = random_config[layer_idx]
+        print(f"  - Layer {layer_idx}: {len(heads)} heads {heads}")
+
+    return random_config
+
 
 def extract_length_from_filename(template_name: str) -> str:
     """
@@ -146,7 +206,7 @@ def setup_model_and_harmful_data(model_path: str, cfg: Config) -> Tuple[object, 
     model_base = construct_model_base(model_path)
     
     # Use same sampling logic as run_pipeline.py
-    random.seed(42)
+    random.seed(37)
     
     # Load harmful instructions from evaluation datasets
     print(f"Loading harmful instructions from evaluation datasets: {cfg.evaluation_datasets}")
@@ -689,15 +749,28 @@ def main():
                        help='Enable attention head ablation during forward pass')
     parser.add_argument('--ablation_output_dir', type=str, default='./results/head_ablation_results',
                        help='Output directory for ablation results')
-    parser.add_argument('--use_correct_ablation', action='store_true',
+    parser.add_argument('--use_correct_ablation', action='store_true', default=True,
                        help='Use mathematically correct attention head ablation implementation')
+    parser.add_argument('--enable_random_head_ablation', action='store_true',
+                       help='Enable random head ablation in layers 15-35 (60 heads, excluding configured heads)')
 
     args = parser.parse_args()
-    
+
+    # Check for conflicting ablation options
+    if args.enable_head_ablation and args.enable_random_head_ablation:
+        print("❌ Error: Cannot use both --enable_head_ablation and --enable_random_head_ablation simultaneously")
+        print("Please choose only one ablation type:")
+        print("  --enable_head_ablation: Use predefined HEAD_ABLATION_CONFIG")
+        print("  --enable_random_head_ablation: Use randomly selected heads")
+        return
+
     print("Starting template-based harmful component analysis...")
     if args.enable_head_ablation:
         print("🎯 ATTENTION HEAD ABLATION ENABLED")
         print(f"Will ablate {len(HEAD_ABLATION_CONFIG)} layers with {sum(len(heads) for heads in HEAD_ABLATION_CONFIG.values())} total heads")
+    elif args.enable_random_head_ablation:
+        print("🎯 RANDOM HEAD ABLATION ENABLED")
+        print("Will randomly select 60 heads from layers 15-35 (excluding configured heads)")
     print(f"Model path: {args.model_path}")
     print(f"Direction path: {args.direction_path}")
     print(f"Output directory: {args.output_dir}")
@@ -732,7 +805,7 @@ def main():
     # Format instructions with template
     formatted_instructions = format_instructions_with_template(harmful_instructions, format_thinking_template)
 
-    # 🔥 Critical branch: Choose whether to use ablation
+    # 🔥 Critical branch: Choose ablation type
     if args.enable_head_ablation:
         ablation_type = "CORRECT" if args.use_correct_ablation else "LEGACY"
         print(f"\n=== 🎯 Running with {ablation_type} Attention Head Ablation ===")
@@ -745,9 +818,37 @@ def main():
         output_dir = args.ablation_output_dir
         ablation_suffix = "head_ablated"
         final_length_suffix = f"{length_suffix}_{ablation_suffix}"
+        ablation_config_used = HEAD_ABLATION_CONFIG
 
         # Save ablation metadata
         save_ablation_metadata(HEAD_ABLATION_CONFIG, output_dir, final_length_suffix)
+
+        # Restore original attention forwards if using correct implementation
+        if args.use_correct_ablation:
+            restore_original_attention_forwards(model_base)
+
+    elif args.enable_random_head_ablation:
+        print(f"\n=== 🎯 Running with Random Head Ablation ===")
+
+        # Generate random head ablation config
+        random_ablation_config = generate_random_head_ablation_config(HEAD_ABLATION_CONFIG)
+
+        ablation_type = "CORRECT" if args.use_correct_ablation else "LEGACY"
+        print(f"Using {ablation_type} ablation implementation")
+
+        component_values = collect_activations_with_head_ablation(
+            model_base, formatted_instructions, direction, random_ablation_config,
+            args.batch_size, args.use_correct_ablation
+        )
+
+        # Use dedicated output directory and filename
+        output_dir = args.ablation_output_dir
+        ablation_suffix = "random_head_ablated"
+        final_length_suffix = f"{length_suffix}_{ablation_suffix}"
+        ablation_config_used = random_ablation_config
+
+        # Save ablation metadata
+        save_ablation_metadata(random_ablation_config, output_dir, final_length_suffix)
 
         # Restore original attention forwards if using correct implementation
         if args.use_correct_ablation:
@@ -760,13 +861,16 @@ def main():
         )
         output_dir = args.output_dir
         final_length_suffix = length_suffix
+        ablation_config_used = None
 
     # Organize and save results
     n_layers = model_base.model.config.num_hidden_layers
-    if args.enable_head_ablation:
+    if args.enable_head_ablation or args.enable_random_head_ablation:
+        ablation_type_str = "predefined" if args.enable_head_ablation else "random"
         metadata.update({
             "ablation_applied": True,
-            "ablation_config": HEAD_ABLATION_CONFIG,
+            "ablation_type": ablation_type_str,
+            "ablation_config": ablation_config_used,
             "template_file": args.template_file,
             "template_length": length_suffix
         })
@@ -785,7 +889,9 @@ def main():
     print(f"\n=== ✅ Analysis Complete ===")
     print(f"Results saved to {output_dir}")
     if args.enable_head_ablation:
-        print(f"🎯 Ablation applied to {len(HEAD_ABLATION_CONFIG)} layers")
+        print(f"🎯 Predefined ablation applied to {len(HEAD_ABLATION_CONFIG)} layers")
+    elif args.enable_random_head_ablation:
+        print(f"🎯 Random ablation applied to {len(ablation_config_used)} layers with {sum(len(heads) for heads in ablation_config_used.values())} total heads")
     print("Template-based harmful component calculation finished")
 
 
